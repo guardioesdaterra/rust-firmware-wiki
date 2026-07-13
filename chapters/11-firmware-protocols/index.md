@@ -509,6 +509,34 @@ impl<H: MessageHandler> RetryHandler<H> {
                 None => {
                     last_error = Some(Error::NoResponse);
 
+                    // ── Exponential backoff with LEFT SHIFT ──────────────────
+                    // (1 << attempt) doubles the delay for each retry:
+                    //
+                    //   attempt=0:  1 << 0 = 1      → delay = base_delay × 1
+                    //   attempt=1:  1 << 1 = 2      → delay = base_delay × 2
+                    //   attempt=2:  1 << 2 = 4      → delay = base_delay × 4
+                    //   attempt=3:  1 << 3 = 8      → delay = base_delay × 8
+                    //
+                    // How << works:
+                    //   1 (binary 0001) shifted left by N = 2^N:
+                    //     1 << 0 = 0b0001 = 1
+                    //     1 << 1 = 0b0010 = 2
+                    //     1 << 2 = 0b0100 = 4
+                    //     1 << 3 = 0b1000 = 8
+                    //
+                    // Each left shift MULTIPLIES by 2 (same as × 2^N).
+                    //
+                    // Why use << instead of .pow() or multiplication?
+                    //   1. ZERO-COST: << is a single CPU instruction (LSL)
+                    //   2. NO overflow check: 1u32 << 31 = 0x8000_0000 (valid)
+                    //   3. PREDICTABLE: compiler can't optimize it away
+                    //
+                    // Practical uses of << in firmware:
+                    //   - 1 << N:     create a mask for bit N
+                    //   - value << 8: pack a byte into the high byte of a u16
+                    //   - (a << 16) | b: pack two u16 values into one u32
+                    //   - BIT(x):    C macro equivalent = 1 << x
+                    //   - delay *= 2: exponential backoff (networking, retries)
                     if attempt < self.max_retries {
                         let delay = self.base_delay_ms * (1 << attempt);
                         cortex_m::asm::delay(delay * 8000); // Assume 8MHz

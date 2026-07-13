@@ -229,9 +229,34 @@ impl CaliptraMailbox {
         let lock_reg = self.base + MAILBOX_LOCK;
         unsafe {
             let val = core::ptr::read_volatile(lock_reg as *const u32);
+            // ── CHECK BIT 0 with & (AND) ────────────────────────────────────
+            // val & 0x01  isolates the lowest bit of the lock register.
+            //
+            //   val      = 0b...XXXX_XXXX_XXXX_XXX?   (? = lock bit)
+            // & 0x01     = 0b...0000_0000_0000_0001
+            //   result   = 0b...0000_0000_0000_000?   (only bit 0 survives)
+            //
+            // If bit 0 is 1 → mailbox is locked → return AlreadyLocked
+            // If bit 0 is 0 → mailbox is free → proceed
+            //
+            // Why AND? Because AND ISOLATES bits. It works like a stencil:
+            // each 1 in the mask lets the corresponding bit through.
+            //   & 1 = keep the bit
+            //   & 0 = block the bit (forced to 0)
+            //
+            // Practical uses of & for checking:
+            //   if status & ERROR_FLAG != 0 → error occurred
+            //   if status & READY_FLAG != 0 → device is ready
+            //   if reg & (1 << N) != 0     → bit N is set
+            //
+            // Note: val & 0x01 != 0 is read as "is bit 0 set?"
+            // In Rust, this doesn't need parentheses because != binds tighter
+            // than &? Actually & binds tighter than !=, so this is correct:
+            //   (val & 0x01) != 0
             if val & 0x01 != 0 {
                 return Err(MailboxError::AlreadyLocked);
             }
+            // Lock by writing 1 to bit 0
             core::ptr::write_volatile(lock_reg as *mut u32, 0x01);
         }
         Ok(())
@@ -289,7 +314,36 @@ impl CaliptraMailbox {
             );
         }
 
-        // Wait for completion
+        // ── Wait for completion (polling loop) ─────────────────────────────
+        // This loop continuously reads the status register until either:
+        //   - STATUS_VALID  (bit 2) is set → command completed successfully
+        //   - STATUS_ERROR  (bit 3) is set → command failed
+        //
+        // The & (AND) operator is used to CHECK whether specific bits are set:
+        //
+        //   ┌─ STATUS register layout ─────────────────────────────────┐
+        //   │ bit 0 (0x01): BUSY   — command is executing              │
+        //   │ bit 1 (0x02): READY  — mailbox is ready                  │
+        //   │ bit 2 (0x04): VALID  — response data is ready to read    │
+        //   │ bit 3 (0x08): ERROR  — command failed                    │
+        //   │ bits 4-31:    reserved (zero)                            │
+        //   └──────────────────────────────────────────────────────────┘
+        //
+        // How status & STATUS_VALID works:
+        //   STATUS_VALID = 0x04 = 0b0000_0100
+        //
+        //   status = 0bXXXX_XXXX_XXXX_XXXX_XXXX_XXXX_XXXX_XABC
+        //   & 0x04 = 0b0000_0000_0000_0000_0000_0000_0000_0100
+        //          = 0b0000_0000_0000_0000_0000_0000_0000_0?00
+        //                   ↑ only bit 2 survives the AND
+        //
+        //   If result == 0 → bit 2 is 0 → keep waiting
+        //   If result != 0 → bit 2 is 1 → break out (response ready)
+        //
+        // The nop() instruction is a "no operation" — it tells the CPU
+        // to do nothing for one cycle. This prevents a tight spinlock
+        // from consuming too much power (the CPU can enter a low-power
+        // state between iterations).
         loop {
             let status = self.read_status();
             if status & STATUS_VALID != 0 {

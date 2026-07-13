@@ -7,6 +7,60 @@ title: "Interactive Playground"
 
 Practice Rust firmware concepts with these interactive examples. Modify the code and run it to see how changes affect the output.
 
+---
+layout: default
+title: "Interactive Playground"
+---
+
+# Interactive Playground
+
+Practice Rust firmware concepts with these interactive examples. Modify the code and run it to see how changes affect the output.
+
+---
+
+## 🔷 Bitwise Operator Cheat Sheet
+
+Firmware engineering is **bit manipulation**. Every hardware register is a collection of bits that control pins, clocks, interrupts, and more.
+
+```
+OPERATOR    NAME            EXAMPLE           FIRMWARE USAGE                 BINARY INTUITION
+──────────  ──────────────  ────────────────  ────────────────────────────   ───────────────────────
+<<          LEFT SHIFT      1 << 3            Create bitmask for bit N      0001 → 1000  (×2^N)
+>>          RIGHT SHIFT     0xF0 >> 4         Extract field, divide by 2^N  11110000 → 00001111
+|           BITWISE OR      a | b             Set bits (combine masks)      0101|0011=0111
+&           BITWISE AND     a & b             Check/isolate bits            0101&0011=0001
+^           BITWISE XOR     a ^ b             Toggle bits, CRC, crypto      0101^0011=0110
+|=          OR-ASSIGN       a |= mask         Set specific bits ON           a = a | mask
+&=          AND-ASSIGN      a &= mask         Clear specific bits OFF        a = a & mask  
+^=          XOR-ASSIGN      a ^= mask         Toggle specific bits           a = a ^ mask
+!           BITWISE NOT     !(1 << bit)       Invert mask for clearing       (Rust: ! on ints = ~)
+~           BITWISE NOT     ~mask             Alternative invert syntax      (C style; in Rust ! is ~)
+```
+
+### Common Firmware Patterns
+
+```rust
+// SET bit N:    reg |= 1 << N;       ← OR in a 1 at position N
+// CLEAR bit N:  reg &= !(1 << N);    ← AND with inverted mask (all 1s except bit N)
+// TOGGLE bit N: reg ^= 1 << N;       ← XOR flips bit N
+// CHECK bit N:  if reg & (1 << N) != 0  ← AND isolates, check if nonzero
+// MASK field:   (reg >> start) & ((1 << width) - 1)  ← shift then AND
+// COMBINE vals: (val1 << 8) | val2   ← shift left + OR to pack bytes
+```
+
+### Why Every Operator Matters in Firmware
+
+| Operator | Daily Firmware Use |
+|----------|-------------------|
+| `<<` | Set a specific bit: `1 << 5` = mask for bit 5. Pack multiple values into one register |
+| `>>` | Extract a field: `(reg >> 12) & 0xF` gets 4 bits starting at position 12 |
+| `|` | Turn on features: `RCC.ahb1enr |= GPIOA_EN` enables a peripheral clock |
+| `&` | Check status: `if status & ERROR_FLAG != 0` checks if an error occurred |
+| `^` | CRC calculation, DICE key derivation, toggling, encryption |
+| `!` | Invert mask: `!(1 << 3)` = `0b11110111`, used in `&= !(1 << N)` to clear bit N |
+
+---
+
 ## 1. no_std Basics
 
 ```rust
@@ -60,15 +114,82 @@ impl SimulatedRegister {
         self.value = val;
     }
     
-    // Bit manipulation (common in firmware)
+    // ──────────────────────────────────────────────────────────────────────────
+    // BIT MANIPULATION — the heart of firmware engineering
+    //
+    // Hardware registers are just collections of bits. Each bit (or group of bits)
+    // controls a specific aspect of hardware: pin state, clock enable, interrupt mask, etc.
+    //
+    // The three fundamental operations are: SET, CLEAR, TOGGLE a specific bit.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    // ── SET BIT ───────────────────────────────────────────────────────────────
+    // Pattern:   reg |= 1 << N       (read: "reg OR-equals 1 shifted left by N")
+    //
+    // Step by step for set_bit(3):
+    //   1. 1            = 0b00000000_00000000_00000000_00000001
+    //   2. 1 << 3       = 0b00000000_00000000_00000000_00001000  (mask with bit 3 set)
+    //                                                    ^-- bit 3
+    //   3. old_value = 0b00000000_00000000_00000000_01100101  (example: 0x65)
+    //   4. |= mask:     OR each bit. 0|0=0, 0|1=1, 1|0=1, 1|1=1
+    //                    0b...01100101
+    //                  | 0b...00001000
+    //                  = 0b...01101101  ← bit 3 is now 1, others unchanged
+    //
+    // Practical use: enable a peripheral clock, set GPIO high, unmask interrupt
     fn set_bit(&mut self, bit: u8) {
         self.value |= 1 << bit;
     }
     
+    // ── CLEAR BIT ─────────────────────────────────────────────────────────────
+    // Pattern:   reg &= !(1 << N)    (read: "reg AND-equals NOT(1 shifted left by N)")
+    //
+    // Step by step for clear_bit(3):
+    //   1. 1 << 3       = 0b00001000  (same mask as set_bit)
+    //   2. !(1 << 3)    = 0b11110111  (bitwise NOT: every FLIPS, 0→1, 1→0)
+    //                                      ^-- bit 3 is now 0 in the mask
+    //   3. old_value    = 0b01101101  (from previous example)
+    //   4. &= mask:     AND each bit. 0&0=0, 0&1=0, 1&0=0, 1&1=1
+    //                    0b...01101101
+    //                  & 0b...11110111
+    //                  = 0b...01100101  ← bit 3 is now 0, all others preserved
+    //
+    // Why NOT? The pattern !(1 << N) creates a mask with ALL 1s EXCEPT bit N.
+    // ANDing with this mask clears bit N while leaving everything else intact.
+    //
+    // In C:   ~(1 << N)     uses ~ for bitwise NOT
+    // In Rust: !(1 << N)    uses !  for bitwise NOT (yes, ! is logical NOT in
+    //                         booleans, but BITWISE NOT on integer types)
+    //
+    // CRITICAL: In Rust, on integers, ! is bitwise NOT (flips all bits).
+    // On booleans, ! is logical NOT. This is a common point of confusion.
+    // But for u8/u16/u32/u64, ! acts exactly like C's ~.
+    //
+    // Practical use: disable a peripheral, set GPIO low, clear interrupt flag
     fn clear_bit(&mut self, bit: u8) {
         self.value &= !(1 << bit);
     }
     
+    // ── TOGGLE BIT ────────────────────────────────────────────────────────────
+    // Pattern:   reg ^= 1 << N       (read: "reg XOR-equals 1 shifted left by N")
+    //
+    // XOR truth table:  0^0=0, 0^1=1, 1^0=1, 1^1=0
+    //   Key insight: XOR with 1 FLIPS the bit. XOR with 0 LEAVES it alone.
+    //
+    // Step by step for toggle_bit(3):
+    //   1. 1 << 3       = 0b00001000
+    //   2. old_value    = 0b01101101
+    //   3. ^= mask:
+    //                    0b...01101101
+    //                  ^ 0b...00001000
+    //                  = 0b...01100101  ← bit 3 flipped: 1→0
+    //
+    // Run again:
+    //                    0b...01100101
+    //                  ^ 0b...00001000
+    //                  = 0b...01101101  ← bit 3 flipped back: 0→1
+    //
+    // Practical use: toggle LED, alternate between two states, CRC calculation
     fn toggle_bit(&mut self, bit: u8) {
         self.value ^= 1 << bit;
     }
@@ -172,16 +293,66 @@ fn main() {
 
 ```rust
 // CRC-16 calculation used in MCTP and other protocols
+//
+// ── WHAT IS CRC? ─────────────────────────────────────────────────────────────
+// Cyclic Redundancy Check — a hash that detects accidental data corruption.
+// It's NOT cryptographic (unlike SHA). It's designed to catch:
+//   - Single-bit errors
+//   - Burst errors (multiple consecutive flipped bits)
+//   - Most common transmission errors
+//
+// CRC is essentially POLYNOMIAL DIVISION in binary. The "polynomial" for the
+// commonly used CRC-16-IBM is 0xA001 (reversed form of 0x8005).
+//
+// ── BITWISE OPERATORS IN CRC ────────────────────────────────────────────────
+//   ^  (XOR)  — the core of CRC: polynomial "subtraction" is XOR
+//   >> (RSH)  — shift bits right, feeding through the polynomial
+//   &  (AND)  — check if the LSB (least significant bit) is 1
 
 fn crc16(data: &[u8]) -> u16 {
+    // 0xFFFF is the initial value. All 16 bits set to 1.
+    // This prevents a leading zero from producing a zero CRC.
     let mut crc: u16 = 0xFFFF;
     
     for &byte in data {
+        // ── XOR the next byte into the CRC ───────────────────────────────────
+        // crc (u16)         = 0bHHHH_HHHH_LLLL_LLLL   (high byte, low byte)
+        // byte as u16       = 0b0000_0000_BBBB_BBBB
+        // crc ^= byte       = XOR each bit position
+        //
+        // XOR truth: 0^0=0, 0^1=1, 1^0=1, 1^1=0
+        // This "feeds" the data byte into the CRC accumulator.
+        //
+        // Practical: XOR is reversible! CRC(XOR(a,b)) = CRC(a) XOR CRC(b)
+        // This is why CRC is good for detecting errors but NOT cryptographically secure.
         crc ^= byte as u16;
+        
+        // ── Process 8 bits (one byte) ────────────────────────────────────────
         for _ in 0..8 {
+            // ── Check LSB with & ─────────────────────────────────────────────
+            // crc & 1  = isolate the least significant bit (bit 0)
+            //   crc = 0b...XXXX_XXX1
+            // &   1 = 0b...0000_0001
+            //        = 0b...0000_0001  (nonzero → true)
+            //
+            // This checks whether a 1 "fell off" the right side on the next shift.
+            // If so, we need to XOR with the polynomial to "reflect" it back.
             if crc & 1 != 0 {
+                // ── Right shift + polynomial ─────────────────────────────────
+                // crc >> 1  = shift all bits right by 1 (divide by 2)
+                //   0bABCD_EFGH >> 1 = 0b0ABC_DEFG
+                //
+                // ^ 0xA001 = XOR with the CRC-16-IBM polynomial (reflected)
+                //   0xA001 = 0b1010_0000_0000_0001
+                //
+                // Why XOR? Shifting right drops the LSB. But in CRC, that bit
+                // represents a term in the polynomial that must be "fed back."
+                // XOR with the polynomial compensates for the lost term.
                 crc = (crc >> 1) ^ 0xA001;
             } else {
+                // ── Just right shift (no polynomial feedback) ────────────────
+                // If LSB was 0, nothing to feed back — just shift.
+                // crc >>= 1 is equivalent to crc = crc >> 1
                 crc >>= 1;
             }
         }
@@ -211,6 +382,20 @@ fn main() {
 
 ```rust
 // Simplified DICE CDI generation using HMAC-SHA256
+//
+// ── WHY XOR IN CRYPTO? ───────────────────────────────────────────────────────
+// XOR is the universal primitive in cryptography because:
+//   a) It's REVERSIBLE:   (a ^ b) ^ b = a   (XOR twice = identity)
+//   b) It's BALANCED:     each output bit depends equally on both input bits
+//   c) It's FAST:         single instruction on any CPU
+//
+// Real symmetric ciphers (AES, ChaCha20) use XOR as their final mixing step.
+// HMAC uses XOR for inner/outer padding (ipad/opad):
+//   ipad = key ^ 0x363636...   (the "inner" pad)
+//   opad = key ^ 0x5C5C5C...   (the "outer" pad)
+//
+// In DICE, XOR isn't the real HMAC — this is a simulation to demonstrate
+// how XOR integrates into a layered security scheme.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -219,7 +404,18 @@ use std::hash::{Hash, Hasher};
 fn simple_hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
     let mut result = [0u8; 32];
     
-    // XOR key with data (simplified)
+    // ── XOR for key-data mixing ──────────────────────────────────────────────
+    // This simulates the real HMAC inner/outer pad construction:
+    //   Real:  inner = H((K ^ ipad) || message)
+    //   Here:  result[i] = key_byte ^ data_byte  (simplified)
+    //
+    // ^ (XOR) on each byte position:
+    //   key_byte  = 0b1100_1010
+    //   data_byte = 0b1010_1111
+    //   result    = 0b0110_0101   ← bits differ → 1, bits same → 0
+    //
+    // XOR with key gives us a MIXED value where neither key nor data
+    // alone determines the output. This is the avalanche principle.
     for i in 0..32 {
         let key_byte = key.get(i % key.len()).copied().unwrap_or(0);
         let data_byte = data.get(i % data.len()).copied().unwrap_or(0);
@@ -231,6 +427,21 @@ fn simple_hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
     result.hash(&mut hasher);
     let hash = hasher.finish().to_le_bytes();
     
+    // ── XOR to fold hash back into result ────────────────────────────────────
+    // The 8-byte hash is folded into the 32-byte result with XOR.
+    // This spreads the hash's entropy across all positions.
+    //
+    // result[i % 32] ^= hash[i];
+    //   meaning: result[pos] = result[pos] ^ hash[i]
+    //
+    // Since i % 32 gives 0..7 (hash is 8 bytes), each hash byte XORs
+    // into four different result positions:
+    //   hash[0] → result[0], result[8],  result[16], result[24]
+    //   hash[1] → result[1], result[9],  result[17], result[25]
+    //   ...
+    //
+    // Unlike |= (set) and &= (clear), ^= FLIPS bits rather than fixing them.
+    // This is essential for diffusion — small input changes cascade.
     for i in 0..8 {
         result[i % 32] ^= hash[i];
     }
@@ -281,6 +492,19 @@ fn sha256_simulate(data: &[u8]) -> [u8; 32] {
     data.hash(&mut hasher);
     let hash = hasher.finish().to_le_bytes();
     
+    // ── XOR for position-dependent mixing ────────────────────────────────────
+    // hash[i % 8] ^ (i as u8)
+    //
+    // This XORs each hash byte with its position index to ensure that
+    // even if the hash is all zeros, different positions get different values.
+    //
+    //   i=0:  hash[0] ^ 0x00  = hash[0]   (unchanged)
+    //   i=1:  hash[1] ^ 0x01  = hash[1] flipped at bit 0
+    //   i=2:  hash[2] ^ 0x02  = hash[2] flipped at bit 1
+    //   i=8:  hash[0] ^ 0x08  = same hash byte, but bit 3 flipped
+    //
+    // Without XOR, hash[i % 8] would repeat every 8 bytes identically.
+    // The ^ (i as u8) breaks this symmetry — each position is unique.
     for i in 0..32 {
         result[i] = hash[i % 8] ^ (i as u8);
     }

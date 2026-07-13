@@ -235,6 +235,29 @@ pub mod fpga {
         type Error = FpgaError;
 
         fn read(&mut self, offset: u32, buffer: &mut [u8]) -> Result<(), FpgaError> {
+            // ── Volatile MMIO read ──────────────────────────────────────────
+            // read_volatile(addr as *const u8):
+            //
+            // This reads a SINGLE BYTE from a memory-mapped FPGA flash address.
+            //
+            // Why volatile?
+            //   Without volatile, the compiler might:
+            //   1. Merge consecutive reads: if you read addr twice, it caches
+            //      the first result and reuses it (BAD for flash that changes)
+            //   2. Reorder reads: the compiler may reorder for "optimization"
+            //      (BAD when order matters for hardware protocol timing)
+            //   3. Skip reads entirely if the result is "unused"
+            //
+            // read_volatile guarantees:
+            //   - Exactly ONE read from the given address
+            //   - Reads happen IN ORDER (no reordering past other volatiles)
+            //   - The read is NEVER optimized away
+            //
+            // The address calculation:
+            //   addr = self.base + (offset as usize) + i
+            //   This is just pointer arithmetic — adding byte offset to base.
+            //   No bitwise ops here, but the address itself often contains
+            //   packed bitfields in real hardware (e.g., offset << 8 | bank).
             for (i, byte) in buffer.iter_mut().enumerate() {
                 let addr = self.base + (offset as usize) + i;
                 *byte = unsafe { core::ptr::read_volatile(addr as *const u8) };
@@ -243,6 +266,24 @@ pub mod fpga {
         }
 
         fn write(&mut self, offset: u32, data: &[u8]) -> Result<(), FpgaError> {
+            // ── Volatile MMIO write ─────────────────────────────────────────
+            // write_volatile(addr as *mut u8, byte):
+            //
+            // Same guarantees as read_volatile, but for writes:
+            //   1. Exactly ONE write to the given address
+            //   2. Writes happen IN ORDER
+            //   3. The write is NEVER optimized away
+            //
+            // Without volatile, this write might be:
+            //   - Delayed (batched with other writes)
+            //   - Eliminated (if the compiler "proves" it's unused)
+            //   - Merged (if you write the same value twice)
+            //
+            // For FPGA flash, these guarantees are CRITICAL because:
+            //   - Flash commands are sequences (CMD, ADDR, DATA) that must
+            //     be delivered in exact order with precise timing
+            //   - A merged write could skip the command byte entirely
+            //   - A delayed write could violate the flash's timing window
             for (i, &byte) in data.iter().enumerate() {
                 let addr = self.base + (offset as usize) + i;
                 unsafe { core::ptr::write_volatile(addr as *mut u8, byte) };

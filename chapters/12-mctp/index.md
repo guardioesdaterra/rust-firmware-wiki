@@ -572,11 +572,66 @@ impl McptMessage {
 }
 
 fn crc16_update(crc: u16, byte: u8) -> u16 {
+    // ── XOR byte into CRC accumulator ────────────────────────────────────────
+    // crc ^ (byte as u16):
+    //
+    //   crc         = 0bHHHH_HHHH_HHHH_HHHH   (u16: current CRC value)
+    //   byte as u16 = 0b0000_0000_BBBB_BBBB   (u8 zero-extended to u16)
+    //   XOR result  = 0bHHHH_HHHH_HHHH_H?H?   (high byte preserved,
+    //                                           low byte bits XOR'd with byte)
+    //
+    // Why XOR? CRC is based on binary polynomial division, where
+    // "addition" IS XOR (carryless addition). This feeds the new byte
+    // into the polynomial division state machine.
+    //
+    // XOR truth table:  0^0=0  0^1=1  1^0=1  1^1=0
+    // Key property: XOR is its own inverse: (a ^ b) ^ b = a
+    // This is why CRC verification works: if you include the CRC in the data,
+    // the final CRC is always 0x0000 (the polynomial division has no remainder).
     let mut crc = crc ^ (byte as u16);
+    
+    // ── Process 8 bits (one byte) ────────────────────────────────────────────
     for _ in 0..8 {
+        // ── Check LSB with & (AND) ────────────────────────────────────────
+        // crc & 1  = isolate the least significant bit (bit 0) of the CRC
+        //
+        //   crc   = 0b...HHHH_HHHH_HHHH_H?   (? = LSB before shifting)
+        // & 1     = 0b...0000_0000_0000_0001
+        // result  = 0b...0000_0000_0000_000?   (only LSB survives)
+        //
+        // In CRC, the LSB determines whether the polynomial gets "fed back."
+        // If LSB = 1, the bit that would be lost (shifted out) gets XOR'd back.
         if crc & 1 != 0 {
+            // ── Shift + polynomial XOR ────────────────────────────────────
+            // (crc >> 1) ^ 0xA001:
+            //
+            // Step 1: crc >> 1  (right shift by 1 = divide by 2)
+            //   crc before  = 0b...HHHH_HHHH_HHHH_H?1   (LSB=1)
+            //   crc >> 1    = 0b...0HHH_HHHH_HHHH_HHH   (LSB falls off, MSB→0)
+            //                                                    ↑ lost!
+            //
+            // Step 2: ^ 0xA001
+            //   0xA001 = 0b1010_0000_0000_0001
+            //   This is the CRC-16-IBM polynomial in "reflected" form
+            //   (the LSB represents the highest-degree term).
+            //
+            //   XOR with 0xA001 "feeds back" the lost bit into the polynomial.
+            //   Effectively: the lost 1 re-enters at specific tap positions.
+            //
+            // Practical: 0xA001 is the REVERSED form of 0x8005.
+            //   Original polynomial: x^16 + x^15 + x^2 + 1
+            //   Reversed: 0xA001 = 1010 0000 0000 0001
             crc = (crc >> 1) ^ 0xA001;
         } else {
+            // ── Just shift (no polynomial feedback) ───────────────────────
+            // If LSB = 0, nothing to feed back. Just shift right.
+            //
+            // crc >>= 1:
+            //   crc before  = 0b...HHHH_HHHH_HHHH_H?0   (LSB=0)
+            //   crc >>= 1   = 0b...0HHH_HHHH_HHHH_HHH   (LSB=0 discarded, MSB→0)
+            //
+            // The 0 that fell off would not have affected the polynomial
+            // (0 × x^n = 0), so no XOR correction needed.
             crc >>= 1;
         }
     }

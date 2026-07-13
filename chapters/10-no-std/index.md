@@ -119,13 +119,31 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         );
     }
 
-    // Signal error via LED pattern
+    // ── PAC modify() for register manipulation ──────────────────────────────
+    // The modify() closure pattern: modify(|current_value, writer| { ... })
+    //
+    // This is how PAC crates provide SAFE register access. Under the hood,
+    // modify() does:
+    //   1. read_volatile to get current register value
+    //   2. Passes value to the closure as `current` (first arg, often `_`)
+    //   3. Closure uses the `writer` (second arg, `w`) to build new value
+    //   4. write_volatile with the new value
+    //
+    // The writer methods like .odr5().set_bit() generate the exact bitmask
+    // internally. For ODR (Output Data Register), each bit controls one pin:
+    //   bit 5 = 1 → PA5 output goes HIGH (LED on)
+    //   bit 5 = 0 → PA5 output goes LOW  (LED off)
+    //
+    // Equivalent raw bit op: reg |= 1 << 5   (set bit 5)
+    //                       reg &= !(1 << 5) (clear bit 5)
     unsafe {
         let gpioa = &*stm32f4::stm32f411::GPIOA::ptr();
         // Fast blink = error
         for _ in 0..10 {
+            // .set_bit() = write 1 to ODR bit 5 (LED ON)
             gpioa.odr.modify(|_, w| w.odr5().set_bit());
             delay_cycles(100_000);
+            // .clear_bit() = write 0 to ODR bit 5 (LED OFF)
             gpioa.odr.modify(|_, w| w.odr5().clear_bit());
             delay_cycles(100_000);
         }
@@ -416,6 +434,29 @@ use panic_halt as _;
 fn main() -> ! {
     let peripherals = stm32f4::stm32f411::Peripherals::take().unwrap();
 
+    // ── PAC modify() — type-safe bitfield manipulation ─────────────────
+    //
+    // Each call to modify() does READ-MODIFY-WRITE:
+    //   1. READ current register value (with read_volatile)
+    //   2. MODIFY the requested bits via the closure
+    //   3. WRITE new value (with write_volatile)
+    //
+    // The closure's second arg `w` is a "proxy" object with named methods
+    // for each bitfield. It generates the correct bitmask automatically:
+    //
+    //   .gpioaen().set_bit()
+    //     → sets bit 0 of RCC_AHB1ENR (the GPIOA clock enable bit)
+    //     → raw equivalent: reg |= 1 << 0
+    //
+    //   .moder5().output()
+    //     → clears MODER bits [11:10] then sets them to 0b01
+    //       (each pin uses 2 bits; pin 5 = bits 11:10)
+    //     → raw equivalent: (reg & !(0b11 << 10)) | (0b01 << 10)
+    //
+    //   .odr5().toggle()
+    //     → flips bit 5 of ODR (Output Data Register)
+    //     → raw equivalent: reg ^= 1 << 5
+    //
     // Enable GPIOA clock
     peripherals.RCC.ahb1enr.modify(|_, w| w.gpioaen().set_bit());
 
@@ -600,11 +641,28 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
         let gpioa = &*stm32f4::stm32f411::GPIOA::ptr();
         let rcc = &*stm32f4::stm32f411::RCC::ptr();
 
-        // Enable GPIOA clock
+        // ── PAC modify() — panic handler LED setup ──────────────────────
+        // Each call is a READ-MODIFY-WRITE cycle using volatile access.
+        //
+        // .gpioaen().set_bit():
+        //   RCC_AHB1ENR bit 0 = GPIOA clock enable
+        //   Sets bit 0 to 1 → GPIOA peripheral receives clock
+        //   If clock is disabled, ALL GPIOA register writes are IGNORED.
+        //   Raw: reg |= 1 << 0
         rcc.ahb1enr.modify(|_, w| w.gpioaen().set_bit());
-        // Configure PA5 as output
+        // .moder5().output():
+        //   GPIOA_MODER bits [11:10] = PA5 mode field
+        //   Clears [11:10] to 00, sets to 01 (output)
+        //   Raw: (reg & !(0b11 << 10)) | (0b01 << 10)
         gpioa.moder.modify(|_, w| w.moder5().output());
 
+        // Closures capture the GPIOA pointer and encapsulate bit operations.
+        //
+        // led_on()  → ODR bit 5 = 1 → PA5 HIGH → LED lights up
+        //   Raw: reg |= 1 << 5
+        //
+        // led_off() → ODR bit 5 = 0 → PA5 LOW → LED turns off
+        //   Raw: reg &= !(1 << 5)
         let mut led_on = || gpioa.odr.modify(|_, w| w.odr5().set_bit());
         let mut led_off = || gpioa.odr.modify(|_, w| w.odr5().clear_bit());
 

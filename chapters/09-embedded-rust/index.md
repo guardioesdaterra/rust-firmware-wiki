@@ -58,6 +58,32 @@ unsafe {
     // Read current value
     let current = core::ptr::read_volatile(GPIO_MODER);
     // Set bits 0-1 to configure pin 0 as output (01)
+    //
+    // │ OPERATOR: BITWISE OR (|)
+    // │ Intuition: 0|0=0, 0|1=1, 1|0=1, 1|1=1  — "any 1 makes it 1"
+    // │ Usage:     SET bits to 1 without disturbing other bits
+    // │
+    // │ current = 0b...XXXX_XXXX_XXXX_XXXX  (unknown/previous state)
+    // │ 0b01    = 0b...0000_0000_0000_0001  (mask for bit 0)
+    // │ current | 0b01 ensures bit 0 is 1, all other bits unchanged.
+    // │
+    // │┌──────────────────────────────────────────────────────────────────┐
+    // ││                    MODER register layout                        │
+    // ││ Each GPIO pin uses 2 bits in MODER:                             │
+    // ││   00 = Input    01 = Output    10 = Alternate    11 = Analog    │
+    // ││                                                                  │
+//  ││   bit 1  bit 0  │  Meaning                                        │
+    // ││   0      0     │  Input (default/reset state)                    │
+    // ││   0      1     │  Output  ← we want this                        │
+    // ││   1      0     │  Alternate function                            │
+    // ││   1      1     │  Analog                                         │
+    // ││                                                                  │
+    // ││ Pin 0 = bits [1:0],  Pin 1 = bits [3:2],  Pin 2 = bits [5:4]   │
+    // │└──────────────────────────────────────────────────────────────────┘
+    //
+    // Why | 0b01 instead of just = 0b01?
+    // Because other bits in the register control OTHER pins. Writing 0b01
+    // would reset those to input mode. Using |= preserves existing config.
     core::ptr::write_volatile(GPIO_MODER, current | 0b01);
 }
 ```
@@ -67,15 +93,29 @@ unsafe {
 Compilers optimize away "unnecessary" reads and writes. If you write to a register and immediately read it back, the compiler might skip the write or reuse a cached value. This is catastrophic for hardware registers that can change state externally.
 
 ```rust
-// BAD: compiler may optimize away the write
+// ── BAD: non-volatile access ──────────────────────────────────────────
+// Compiler sees: write to *reg, then read *reg.
+// Optimization: "the value at *reg hasn't changed between write and read,
+//                and no other code could have changed it."
+// Result: compiler REUSES the written value (0x01) instead of re-reading.
+//         For a hardware register that auto-clears or changes on read,
+//         this is CATASTROPHIC — you missed the actual hardware state.
 let reg = 0x4000_0000 as *mut u32;
 unsafe { *reg = 0x01; }
-unsafe { let val = *reg; } // compiler might skip the write!
+unsafe { let val = *reg; } // compiler might skip the read entirely!
 
-// GOOD: volatile ensures the access happens
+// ── GOOD: volatile access ─────────────────────────────────────────────
+// volatile tells the compiler: "this address has SIDE EFFECTS on read/write"
+//   - Every volatile read MUST actually read from the address
+//   - Every volatile write MUST actually write to the address
+//   - Volatile accesses CANNOT be reordered past each other
+//   - Volatile accesses CANNOT be eliminated even if "unused"
+//
+// This is the SOLE guarantee that firmware has against the optimizer.
+// MMIO registers, DMA buffers, and shared memory ALL depend on volatile.
 let reg = 0x4000_0000 as *mut u32;
 unsafe { core::ptr::write_volatile(reg, 0x01); }
-unsafe { let val = core::ptr::read_volatile(reg); } // guaranteed to read after write
+unsafe { let val = core::ptr::read_volatile(reg); } // guaranteed: read happens AFTER write
 ```
 
 {% include callout.html type="warning" title="Volatile is Non-Negotiable" content="Every single access to a hardware register MUST use volatile operations. Forgetting volatile is the #1 source of subtle, hard-to-debug firmware issues. The `read_volatile` and `write_volatile` functions are your safety net." %}
@@ -97,12 +137,36 @@ use stm32f4::stm32f411;
 
 let peripherals = stm32f411::Peripherals::take().unwrap();
 
-// Type-safe GPIO configuration
+// ── Type-safe GPIO configuration via PAC modify() ─────────────────────
+// The modify() closure does a READ-MODIFY-WRITE:
+//   1. Reads current MODER value (volatile)
+//   2. Applies changes through the `w` (writer) proxy
+//   3. Writes result back (volatile)
+//
+// .moder5().output():
+//   → Pin 5 uses MODER bits [11:10] (each pin = 2 bits)
+//   → Clears bits [11:10] to 00, then sets them to 01
+//   → Equivalent raw: (reg & !(0b11 << 10)) | (0b01 << 10)
+//
+//   Step by step:
+//     reg          = 0b...XXXX_XXXX_XXXX_XXXX  (current register)
+//     !(0b11 << 10)= 0b...1111_0011_1111_1111  (clear mask for bits 11:10)
+//     reg & mask   = 0b...XXXX_00XX_XXXX_XXXX  (bits 11:10 = 00)
+//     | 0b01 << 10 = 0b...0001_0000_0000_0000
+//     final        = 0b...XX01_00XX_XXXX_XXXX  (bits 11:10 = 01 = output)
 peripherals.GPIOA.moder.modify(|_, w| {
     w.moder5().output() // Set PA5 as output — readable and safe
 });
 
-// Type-safe register write
+// ── Type-safe register write via PAC modify() ─────────────────────────
+// .odr5().set_bit():
+//   → ODR (Output Data Register) uses 1 bit per pin
+//   → Sets bit 5 to 1 → PA5 goes HIGH → LED on
+//   → Equivalent raw: reg |= 1 << 5
+//
+//   reg     = 0b...XXXX_XXXX_XX0X_XXXX  (current, bit 5 = 0)
+//   1 << 5  = 0b...0000_0000_0010_0000  (mask for bit 5)
+//   |= mask = 0b...XXXX_XXXX_XX1X_XXXX  (bit 5 = 1, others unchanged)
 peripherals.GPIOA.odr.modify(|_, w| {
     w.odr5().set_bit() // Turn on LED
 });
@@ -111,14 +175,51 @@ peripherals.GPIOA.odr.modify(|_, w| {
 ### Comparison: Raw vs PAC
 
 ```rust
-// Raw (dangerous, hard to read)
+// ── Raw register manipulation (dangerous, hard to read) ───────────────
+//
+// This single line does THREE bitwise operations. Let's decode each:
+//
+//   (val & !0x3) | 0x1
+//    │      │        │
+//    │      │        └── 2. OR with 0x1 = set bit 0 to 1
+//    │      │               (output mode, the low bit of the field)
+//    │      │
+//    │      └── 1. !0x3 = bitwise NOT of mask 0b0011
+//    │                    !0b0011 = 0b...11111100
+//    │                    val & !0x3 = CLEAR bits [1:0] (the pin 0 field)
+//    │                    This clears both MODER bits for pin 0 to 00.
+//    │
+//    └── 3. (cleared_val) | 0x1 = set bit 0 only → 0b01 = output
+//
+// Why NOT then OR? The "clear-then-set" pattern is universal:
+//   reg = (reg & ~MASK) | VALUE
+//
+// This is the SAFE way to modify a bitfield: clear the field first,
+// then set the new value. Without the clear step, old bits would remain:
+//   val = 0b11;  val | 0x1 = 0b11 (WRONG! we wanted 0b01)
+//   val = 0b11; (val & !0x3) = 0b00; 0b00 | 0x1 = 0b01 (CORRECT!)
 unsafe {
     let moder = (0x4002_0000 + 0x00) as *mut u32;
     let val = core::ptr::read_volatile(moder);
     core::ptr::write_volatile(moder, (val & !0x3) | 0x1);
 }
 
-// PAC (safe, readable, self-documenting)
+// ── PAC equivalent (safe, readable, self-documenting) ─────────────────
+//
+// The PAC's modify() closure does the EXACT same clear-then-set pattern
+// internally, but you write it as named fields. The closure receives:
+//   |register_value, writer|
+//
+// The `w` (writer) has methods like:
+//   .moder0().output()  →  clears MODER0 field, sets it to Output
+//
+// Under the hood, the PAC generates:
+//   self.moder.modify(|r, w| {
+//       let r = (r & !0x3) | 0x1;  ← exact same raw bit ops!
+//       w.bits(r)
+//   });
+//
+// But you never see the bit manipulation — it's abstracted away safely.
 peripherals.GPIOA.moder.modify(|_, w| w.moder0().output());
 ```
 
@@ -170,7 +271,19 @@ Interrupts allow hardware to signal the processor when something happens (timer 
 // Define an interrupt handler
 #[interrupt]
 fn TIM2_IRQ() {
-    // Clear interrupt flag
+    // ── Clear interrupt flag with PAC modify() ──────────────────────────
+    // TIM2_SR (Status Register) bit 0 = UIF (Update Interrupt Flag)
+    //
+    // When the timer overflows, hardware SETS UIF=1 automatically.
+    // We must CLEAR it in software, or the interrupt fires forever.
+    //
+    // .uif().clear_bit():
+    //   → writes 0 to bit 0 of TIM2_SR
+    //   → raw equivalent: reg &= !(1 << 0)
+    //
+    // Why clear_bit() vs write(0)?
+    //   modify() preserves other bits. Writing 0 to the register would
+    //   clear ALL status flags, potentially losing other events.
     unsafe {
         let tim2 = &*stm32f411::TIM2::ptr();
         tim2.sr.modify(|_, w| w.uif().clear_bit());
@@ -317,9 +430,9 @@ fn main() -> ! {
     let mut led = gpioa.pa5.into_push_pull_output();
 
     loop {
-        led.set_high();
+        led.set_high();                             // ← HAL wrapper: writes 1 to ODR bit 5
         cortex_m::asm::delay(8_000_000); // ~1 second at 16MHz
-        led.set_low();
+        led.set_low();                              // ← HAL wrapper: writes 0 to ODR bit 5
         cortex_m::asm::delay(8_000_000);
     }
 }
@@ -402,14 +515,54 @@ struct Leds {
 }
 
 fn setup_leds(gpioa: &mut pac::GPIOA) -> Leds {
-    // Configure MODER register: set pins 0, 1, 2 to output mode (01)
+    // ── PAC modify() — multiple bitfield writes in one closure ──────────
+    //
+    // This single modify() call does ONE read-modify-write cycle that
+    // modifies THREE separate bitfields simultaneously.
+    //
+    // GPIO MODER register layout (each pin = 2 bits):
+    //
+    //   Bits    │ Field  │ Description
+    //   ────────┼────────┼──────────────────────────────────
+    //   [1:0]   │ MODER0 │ Pin 0 mode (00=in, 01=out, 10=alt, 11=analog)
+    //   [3:2]   │ MODER1 │ Pin 1 mode
+    //   [5:4]   │ MODER2 │ Pin 2 mode
+    //   ...     │ ...    │
+    //   [31:30] │ MODER15│ Pin 15 mode
+    //
+    // .moder0().output() does:
+    //   (reg & !(0b11 << 0)) | (0b01 << 0)
+    //   → clear bits [1:0], set them to 01
+    //
+    // .moder1().output() does:
+    //   (reg & !(0b11 << 2)) | (0b01 << 2)
+    //   → clear bits [3:2], set them to 01
+    //
+    // The PAC is smart: it first reads the register ONCE, applies ALL
+    // three field modifications to the shadow value, then writes ONCE.
+    // This prevents race conditions between independent field updates.
+    //
+    // Equivalent raw bit ops (without PAC):
+    //   let val = gpioa.moder.read().bits();
+    //   val = (val & !(0b11 << 0)) | (0b01 << 0);  // pin 0 → output
+    //   val = (val & !(0b11 << 2)) | (0b01 << 2);  // pin 1 → output
+    //   val = (val & !(0b11 << 4)) | (0b01 << 4);  // pin 2 → output
+    //   gpioa.moder.write(|w| unsafe { w.bits(val) });
     gpioa.moder.modify(|_, w| {
         w.moder0().output();
         w.moder1().output();
         w.moder2().output()
     });
 
-    // Configure ODR: start with all LEDs off
+    // ── ODR: Output Data Register ──────────────────────────────────────
+    //
+    // Unlike MODER (which uses 2 bits per pin), ODR uses 1 bit per pin.
+    //
+    //   bit N = 1 → pin N output is HIGH  (LED on for active-high wiring)
+    //   bit N = 0 → pin N output is LOW   (LED off)
+    //
+    // .clear_bit() on each pin ensures all LEDs start OFF.
+    // Equivalent raw: reg &= !(1 << 0)  and  reg &= !(1 << 1)
     gpioa.odr.modify(|_, w| {
         w.odr0().clear_bit();
         w.odr1().clear_bit();
@@ -446,7 +599,21 @@ fn TIM2_IRQ() {
         tim2.sr.modify(|_, w| w.uif().clear_bit());
     }
 
-    // Toggle LED every interrupt
+    // ── Toggle LED every other interrupt ──────────────────────────────
+    // *COUNT += 1: simple counter increments each interrupt
+    // *COUNT % 2 == 0: toggles on even counts (every other interrupt)
+    //
+    // .odr5().toggle():
+    //   → XOR bit 5 of ODR (Output Data Register)
+    //   → raw equivalent: reg ^= 1 << 5
+    //
+    // XOR toggle:
+    //   First toggle:  ODR bit 5 was 0 → becomes 1 (LED ON)
+    //   Second toggle: ODR bit 5 was 1 → becomes 0 (LED OFF)
+    //   Third toggle:  ODR bit 5 was 0 → becomes 1 (LED ON again)
+    //
+    // Without % 2, the LED would toggle EVERY interrupt (1ms) — too fast
+    // to see. The counter gives a visible 2ms blink.
     *COUNT += 1;
     if *COUNT % 2 == 0 {
         // Toggle LED
@@ -460,19 +627,47 @@ fn TIM2_IRQ() {
 fn setup_timer() {
     let dp = pac::Peripherals::take().unwrap();
 
-    // Enable TIM2 clock
+    // ── modify(): READ-MODIFY-WRITE for individual bits ──────────────────
+    //
+    // .tim2en().set_bit()
+    //   → sets bit 0 of RCC_APB1ENR (TIM2 clock enable)
+    //   → equivalent raw: reg |= 1 << 0
+    //   Without this, TIM2 doesn't receive a clock → no interrupts → silence
     dp.RCC.apb1enr.modify(|_, w| w.tim2en().set_bit());
 
-    // Configure prescaler: 16MHz / 16000 = 1kHz
+    // ── write(): OVERWRITE the entire register ───────────────────────────
+    //
+    // .psc().bits(15999)
+    //   → writes 15999 to the PSC (Prescaler) field of TIM2_PSC
+    //   → timer clock = 16MHz / (15999 + 1) = 1kHz (1 tick per ms)
+    //
+    // Unlike modify(), write() doesn't read first — it sets the FULL value.
+    // This is safe here because PSC is a dedicated register with no other
+    // bitfields that could be disturbed.
     dp.TIM2.psc.write(|w| w.psc().bits(15999));
 
-    // Auto-reload: 1000 counts = 1 second
+    // .arr().bits(999)
+    //   → writes 999 to ARR (Auto-Reload Register)
+    //   → timer counts from 0 to 999 then overflows
+    //   → 1000 ticks × 1ms/tick = 1 second per interrupt
+    //
+    // Understanding .bits():
+    //   The .bits() method writes the RAW value to a bitfield.
+    //   It's the lowest-level PAC write — you handle the value directly.
+    //   Some fields have named variants like .output() or .set_bit()
+    //   that are safer because they prevent invalid values.
     dp.TIM2.arr.write(|w| w.arr().bits(999));
 
-    // Enable update interrupt
+    // .uie().set_bit()
+    //   → sets bit 0 of TIM2_DIER (Update Interrupt Enable)
+    //   → allows TIM2 to generate an interrupt on overflow
+    //   → raw equivalent: reg |= 1 << 0
     dp.TIM2.dier.modify(|_, w| w.uie().set_bit());
 
-    // Enable timer
+    // .cen().set_bit()
+    //   → sets bit 0 of TIM2_CR1 (Counter ENable)
+    //   → the timer starts counting NOW
+    //   → raw equivalent: reg |= 1 << 0
     dp.TIM2.cr1.modify(|_, w| w.cen().set_bit());
 
     // Enable interrupt in NVIC
