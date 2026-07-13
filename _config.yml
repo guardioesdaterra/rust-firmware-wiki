@@ -1,0 +1,70 @@
+title: "Rust Firmware Wiki"
+description: "Complete guide from Rust basics to Caliptra/OpenPRoT firmware development - Interactive Learning Platform"
+remote_theme: pages-themes/cayman@v0.2.0
+plugins:
+  - jekyll-remote-theme
+
+baseurl: "/rust-firmware-wiki"
+url: "https://guardioesdaterra.github.io"
+
+markdown: kramdown
+highlighter: rouge
+permalink: pretty
+
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+collections:
+  chapters:
+    output: true
+    permalink: /chapters/:name/
+
+defaults:
+  - scope:
+      path: ""
+      type: "chapters"
+    values:
+      layout: "chapter"
+
+navigation:
+  - title: "Home"
+    url: /
+  - title: "Start Here"
+    url: /start-here/
+  - title: "Rust Basics"
+    url: /chapters/01-rust-basics/
+  - title: "Ownership"
+    url: /chapters/02-ownership/
+  - title: "Structs & Enums"
+    url: /chapters/03-structs-enums/
+  - title: "Error Handling"
+    url: /chapters/04-error-handling/
+  - title: "Generics & Traits"
+    url: /chapters/05-generics-traits/
+  - title: "Closures & Iterators"
+    url: /chapters/06-closures-iterators/
+  - title: "Smart Pointers"
+    url: /chapters/07-smart-pointers/
+  - title: "Concurrency"
+    url: /chapters/08-concurrency/
+  - title: "Embedded Rust"
+    url: /chapters/09-embedded-rust/
+  - title: "no_std"
+    url: /chapters/10-no-std/
+  - title: "Firmware Protocols"
+    url: /chapters/11-firmware-protocols/
+  - title: "MCTP Deep Dive"
+    url: /chapters/12-mctp/
+  - title: "SPDM & DICE"
+    url: /chapters/13-spdm-dice/
+  - title: "Caliptra"
+    url: /chapters/14-caliptra/
+  - title: "OpenPRoT"
+    url: /chapters/15-openprot/
+  - title: "Portfolio Projects"
+    url: /chapters/16-portfolio/
+  - title: "Exercises"
+    url: /exercises/
+  - title: "Playground"
+    url: /playground/

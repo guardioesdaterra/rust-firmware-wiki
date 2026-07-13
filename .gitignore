@@ -1,0 +1,32 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+*.o
+*.a
+*.so
+*.dylib
+
+# QEMU
+*.elf
+*.bin
+*.hex
+
+# Documentation build
+_site/
+.jekyll-cache/
+.sass-cache/
+.cache/
