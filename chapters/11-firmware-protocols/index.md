@@ -9,7 +9,7 @@ next: /chapters/12-mctp/
 
 # Firmware Protocols
 
-{% include callout.html type="info" title="Why this matters for 9elements" content="Firmware security depends on standardized protocols for communication between components. At 9elements, we implement and contribute to protocols like MCTP, SPDM, PLDM, and DICE that form the foundation of platform trust. Understanding these protocols is essential for building secure firmware ecosystems." %}
+{% include callout.html type="info" title="Why this matters" content="Firmware security depends on standardized protocols for communication between components. Protocols like MCTP, SPDM, PLDM, and DICE form the foundation of platform trust. Understanding these protocols is essential for building secure firmware ecosystems." %}
 
 ## Why Protocols Matter
 

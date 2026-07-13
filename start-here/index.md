@@ -187,7 +187,7 @@ We welcome contributions:
 
 ### Connect
 
-- **9elements** — [9elements.com](https://9elements.com)
+- **CHIPS Alliance** — [chipsalliance.org](https://chipsalliance.org)
 - **Caliptra** — [github.com/chipsalliance/caliptra-sw](https://github.com/chipsalliance/caliptra-sw)
 - **OpenPRoT** — [github.com/chipsalliance/openprot](https://github.com/chipsalliance/openprot)
 - **Hubris** — [hubris.oxide.computer](https://hubris.oxide.computer)

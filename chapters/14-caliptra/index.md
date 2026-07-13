@@ -9,7 +9,7 @@ next: /chapters/15-openprot/
 
 # Caliptra
 
-{% include callout.html type="info" title="Why this matters for 9elements" content="Caliptra is an Open Source Root of Trust (RoT) project co-developed by 9elements with Google, AMD, NVIDIA, Microsoft, and other industry leaders. Understanding Caliptra's architecture, boot flow, and attestation mechanisms is essential for contributing to this critical security infrastructure." %}
+{% include callout.html type="info" title="Why this matters" content="Caliptra is an Open Source Root of Trust (RoT) project co-developed with Google, AMD, NVIDIA, Microsoft, and other industry leaders. Understanding Caliptra's architecture, boot flow, and attestation mechanisms is essential for contributing to this critical security infrastructure." %}
 
 ## What is Caliptra?
 
@@ -614,9 +614,9 @@ cargo audit
 cargo deny check licenses
 ```
 
-## 9elements' Role in Caliptra
+## Caliptra Contributions
 
-9elements contributes to Caliptra in several key areas:
+Contributions to Caliptra focus on several key areas:
 
 ### Core Contributions
 

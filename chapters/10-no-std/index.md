@@ -9,7 +9,7 @@ next: /chapters/11-firmware-protocols/
 
 # no_std Rust
 
-{% include callout.html type="info" title="Why this matters for 9elements" content="Firmware running on microcontrollers and in bootloader contexts has no operating system, no heap allocator, and often no filesystem. `no_std` Rust is how you write code that runs in these minimal environments. Every project at 9elements — from Caliptra to OpenPRoT — uses `no_std` extensively." %}
+{% include callout.html type="info" title="Why this matters" content="Firmware running on microcontrollers and in bootloader contexts has no operating system, no heap allocator, and often no filesystem. `no_std` Rust is how you write code that runs in these minimal environments. Every firmware project — from Caliptra to OpenPRoT — uses `no_std` extensively." %}
 
 ## What is no_std?
 

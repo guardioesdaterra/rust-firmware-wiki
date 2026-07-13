@@ -7,14 +7,7 @@ title: "Interactive Playground"
 
 Practice Rust firmware concepts with these interactive examples. Modify the code and run it to see how changes affect the output.
 
----
-layout: default
-title: "Interactive Playground"
----
-
-# Interactive Playground
-
-Practice Rust firmware concepts with these interactive examples. Modify the code and run it to see how changes affect the output.
+> **📖 Deep Reference:** For a comprehensive guide to bit manipulation — including real production code from GitHub, stories, unsafe analysis, trait abstractions, and async patterns — see the [Bit Manipulation Deep Reference](/reference/bit-manipulation/).
 
 ---
 

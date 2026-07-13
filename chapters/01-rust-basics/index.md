@@ -22,7 +22,7 @@ Before diving into code, let's understand why Rust is perfect for firmware devel
 | **Traits** | Hardware abstraction | Write once, run on any hardware |
 
 <div class="info-box success">
-  <strong>9elements uses Rust</strong> because it provides C-level performance with modern language features. Their Caliptra and OpenPRoT projects are written in Rust, proving it's production-ready for firmware.
+  <strong>Rust is used in production firmware</strong> because it provides C-level performance with modern language features. Caliptra and OpenPRoT projects are written in Rust, proving it's production-ready for firmware.
 </div>
 
 ## 1.1 Setting Up Your Environment

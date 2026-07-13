@@ -9,7 +9,7 @@ next: /chapters/16-portfolio/
 
 # OpenPRoT
 
-{% include callout.html type="info" title="Why this matters for 9elements" content="OpenPRoT (Open Protocol Runtime) is a platform firmware framework that integrates Caliptra with Hubris RTOS. 9elements contributes to OpenPRoT's development, particularly in HAL layer implementation and firmware protocol support. Understanding OpenPRoT is essential for building production firmware on modern platforms." %}
+{% include callout.html type="info" title="Why this matters" content="OpenPRoT (Open Protocol Runtime) is a platform firmware framework that integrates Caliptra with Hubris RTOS. Development focuses on HAL layer implementation and firmware protocol support. Understanding OpenPRoT is essential for building production firmware on modern platforms." %}
 
 ## What is OpenPRoT?
 
@@ -554,7 +554,7 @@ git push origin feature/my-feature
 # Create PR on GitHub
 ```
 
-## 9elements' Role in OpenPRoT
+## OpenPRoT Contributions
 
 ### Key Contributions
 

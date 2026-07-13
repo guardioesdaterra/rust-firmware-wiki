@@ -9,7 +9,7 @@ next: /chapters/10-no-std/
 
 # Embedded Rust
 
-{% include callout.html type="info" title="Why this matters for 9elements" content="9elements specializes in firmware security and trusted computing. Embedded Rust is the foundation for writing secure firmware that replaces legacy C code. Understanding memory-mapped I/O, volatile operations, and hardware abstraction layers is essential for firmware engineers building products like Caliptra and OpenPRoT." %}
+{% include callout.html type="info" title="Why this matters" content="Firmware security and trusted computing starts at the register level. Embedded Rust is the foundation for writing secure firmware that replaces legacy C code. Understanding memory-mapped I/O, volatile operations, and hardware abstraction layers is essential — and all of it depends on bit manipulation. See the [Bit Manipulation Deep Reference](/reference/bit-manipulation/) for a comprehensive guide with real code and stories." %}
 
 ## What is Embedded Rust?
 

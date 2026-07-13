@@ -6,7 +6,7 @@ description: "Complete guide from Rust basics to Caliptra/OpenPRoT firmware deve
 
 <div class="hero">
   <h1><span class="emoji">🦀</span> Rust Firmware Wiki</h1>
-  <p>Complete guide from Rust basics to Caliptra/OpenPRoT firmware development. Interactive tutorials, exercises, and real-world projects for the 9elements Rust Firmware Developer position.</p>
+  <p>Complete guide from Rust basics to Caliptra/OpenPRoT firmware development. Interactive tutorials, exercises, and real-world projects.</p>
   <span class="badge">16 Chapters · 50+ Exercises · Real Projects</span>
 </div>
 
@@ -200,7 +200,7 @@ description: "Complete guide from Rust basics to Caliptra/OpenPRoT firmware deve
     <p>Root of Trust, ROM/FMC/Runtime, attestation</p>
     <div class="tags">
       <span class="tag">Caliptra</span>
-      <span class="tag">9elements</span>
+      <span class="tag">firmware</span>
     </div>
   </a>
   
@@ -251,7 +251,7 @@ rustup target add thumbv7m-none-eabi
 - [Embedded Rust Book](https://docs.rust-embedded.org/book/) - Embedded development
 - [Caliptra](https://github.com/chipsalliance/caliptra-sw) - Root of Trust firmware
 - [OpenPRoT](https://github.com/OpenPRoT/openprot) - Open firmware stack
-- [9elements](https://github.com/9elements) - Your target company
+- [Caliptra](https://github.com/chipsalliance/caliptra-sw) - Open source Root of Trust firmware
 
 <div class="info-box success">
   <strong>Ready to start?</strong> Begin with <a href="/rust-firmware-wiki/chapters/01-rust-basics/">Chapter 1: Rust Basics</a> and work your way through each chapter. Complete the exercises at the end of each chapter to reinforce your learning.

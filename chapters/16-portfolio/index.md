@@ -9,7 +9,7 @@ next: null
 
 # Portfolio Projects
 
-{% include callout.html type="info" title="Why this matters for 9elements" content="A strong portfolio demonstrates practical firmware engineering skills to potential employers. At 9elements, we value candidates who can show working projects with proper documentation, tests, and CI. These five projects cover the essential skills for firmware engineering positions." %}
+{% include callout.html type="info" title="Why this matters" content="A strong portfolio demonstrates practical firmware engineering skills to potential employers. Working projects with proper documentation, tests, and CI show real capability. These five projects cover the essential skills for firmware engineering positions." %}
 
 ## Portfolio Overview
 

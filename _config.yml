@@ -69,3 +69,5 @@ navigation:
     url: /exercises/
   - title: "Playground"
     url: /playground/
+  - title: "Bit Ops Reference"
+    url: /reference/bit-manipulation/

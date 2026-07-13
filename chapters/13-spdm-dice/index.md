@@ -9,7 +9,7 @@ next: /chapters/14-caliptra/
 
 # SPDM & DICE
 
-{% include callout.html type="info" title="Why this matters for 9elements" content="SPDM and DICE are the cornerstone of platform trust at 9elements. We implement DICE for Caliptra's attestation flow and use SPDM for secure device authentication. Understanding these protocols is critical for building firmware that proves its identity and integrity to the rest of the platform." %}
+{% include callout.html type="info" title="Why this matters" content="SPDM and DICE are the cornerstone of platform trust. DICE is implemented for Caliptra's attestation flow and SPDM handles secure device authentication. Understanding these protocols is critical for building firmware that proves its identity and integrity to the rest of the platform." %}
 
 ## Overview
 
@@ -972,7 +972,7 @@ In this chapter, you learned:
 - **SPDM challenges** verify device identity through signature verification
 - **Session encryption** establishes secure communication after authentication
 
-In the next chapter, we'll explore Caliptra — 9elements' Open Source Root of Trust implementation that uses these protocols.
+In the next chapter, we'll explore Caliptra — the Open Source Root of Trust implementation that uses these protocols.
 
 <div class="chapter-nav">
 <a href="{{ page.prev }}" class="btn">← Previous: MCTP Deep Dive</a>

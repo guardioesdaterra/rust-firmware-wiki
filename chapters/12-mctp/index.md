@@ -9,7 +9,7 @@ next: /chapters/13-spdm-dice/
 
 # MCTP Deep Dive
 
-{% include callout.html type="info" title="Why this matters for 9elements" content="MCTP is the backbone of management component communication at 9elements. Our mctp-estack crate implements MCTP in Rust for Caliptra and OpenPRoT. Understanding MCTP internals is essential for firmware engineers working on platform security and device management." %}
+{% include callout.html type="info" title="Why this matters" content="MCTP is the backbone of management component communication. The mctp-estack crate implements MCTP in Rust for Caliptra and OpenPRoT. Understanding MCTP internals is essential for firmware engineers working on platform security and device management." %}
 
 ## MCTP Specification
 
@@ -641,7 +641,7 @@ fn crc16_update(crc: u16, byte: u8) -> u16 {
 
 ## mctp-estack Crate
 
-The `mctp-estack` crate is 9elements' Rust implementation of the MCTP protocol stack.
+The `mctp-estack` crate is a Rust implementation of the MCTP protocol stack.
 
 ### Features
 
@@ -962,7 +962,7 @@ In this chapter, you learned:
 - **Transport bindings** — SMBus, I2C, and PCIe VDM implementations
 - **Request/response flow** — message ID tracking and async patterns
 - **Error handling** — completion codes, retry logic, and recovery
-- **mctp-estack** — 9elements' Rust MCTP implementation
+- **mctp-estack** — Rust MCTP implementation
 
 In the next chapter, we'll explore SPDM and DICE — the security and trust protocols that build on top of MCTP.
 
