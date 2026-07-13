@@ -1,7 +1,10 @@
 <header class="site-header">
   <div class="wrapper">
     <a class="site-title" href="{{ '/' | relative_url }}">Rust Firmware Wiki</a>
-    <nav class="site-nav">
+    <button class="menu-toggle" id="menuToggle" aria-label="Toggle navigation">
+      <span></span><span></span><span></span>
+    </button>
+    <nav class="site-nav" id="siteNav">
       {% for item in site.navigation %}
         <a href="{{ item.url | relative_url }}" class="nav-link {% if page.url == item.url %}active{% endif %}">
           {{ item.title }}

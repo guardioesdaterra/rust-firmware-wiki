@@ -107,6 +107,61 @@ unsafe {
 
 This is the **read-modify-write** pattern. It is the foundation of every firmware bit operation.
 
+### ⚡ Story: The Register That Controlled Everything
+
+**The Scene:** A junior firmware engineer is writing a driver for a new temperature sensor on an STM32 microcontroller. The sensor communicates over I2C, so they need to configure the I2C peripheral's timing registers.
+
+**The Hardware Truth:** The I2C_TIMINGR register is 32 bits wide and controls:
+- Bits [31:28]: PRESC (Prescaler)
+- Bits [23:20]: SCLL (SCL low period)
+- Bits [19:16]: SCLH (SCL high period)
+- Bits [15:8]: SDADEL (Data setup time)
+- Bits [7:0]: SCLDEL (Data hold time)
+
+Each field is a **different size**, at a **different position**, and affects a **different timing parameter**. Writing the wrong value to the wrong bits means the I2C bus runs at the wrong speed — or doesn't work at all.
+
+**The Code That Failed:**
+```rust
+// Engineer found an example that used I2C1_TIMINGR = 0x0010_0D3A
+// and copied it verbatim, thinking "timing is timing"
+unsafe {
+    core::ptr::write_volatile(0x4000_5400 as *mut u32, 0x0010_0D3A);
+}
+// I2C bus runs at 50kHz instead of 400kHz — sensor communication times out
+```
+
+**The Problem:** The example was for a different STM32 family with different I2C clock speeds. The register bit positions were the same, but the required values were completely different. The engineer didn't understand that each bit field controls a **specific timing interval** measured in clock cycles.
+
+**The Fix:**
+```rust
+// Calculate timing for 400kHz I2C with 16MHz peripheral clock
+// Each field must be calculated based on the actual clock frequency
+let presc = 0;      // Divide by 1
+let scll = 0x09;    // 10 clock cycles for SCL low
+let sclh = 0x03;    // 4 clock cycles for SCL high  
+let sdadel = 0x02;  // 2 clock cycles for data setup
+let scldel = 0x04;  // 4 clock cycles for data hold
+
+// Pack each value into its bit position using shift and OR
+let timingr = (presc << 28) | (scldel << 8) | (sdadel << 16) | (scll << 20) | (sclh << 24);
+// Equivalent bit-by-bit:
+//   presc << 28  = 0b0000_0000_0000_0000_0000_0000_0000_0000  (0)
+//   scldel << 8 = 0b0000_0000_0000_0000_0000_0100_0000_0000  (0x400)
+//   sdadel << 16= 0b0000_0000_0000_0010_0000_0000_0000_0000  (0x20000)
+//   scll << 20  = 0b0000_1001_0000_0000_0000_0000_0000_0000  (0x09000000)
+//   sclh << 24  = 0b0011_0000_0000_0000_0000_0000_0000_0000  (0x30000000)
+//   OR all      = 0b0011_1001_0000_0010_0000_0100_0000_0000
+
+unsafe {
+    core::ptr::write_volatile(0x4000_5400 as *mut u32, timingr);
+}
+// I2C now runs at exactly 397kHz — within tolerance for 400kHz Fast Mode
+```
+
+**The Deeper Lesson:** Every bit in a register has a **specific, documented meaning**. You cannot copy timing values between different microcontrollers, different clock speeds, or even different peripheral instances. Each register is a contract between the firmware and the hardware — and the bit positions are negotiated in the chip's datasheet. This is why PAC crates (auto-generated from SVD files) are so valuable: they encode the bit positions as named fields, preventing this class of error entirely.
+
+**How and why you would use bit manipulation here:** The `<<` (shift) operator positions each timing value into its correct bit field. The `|` (OR) operator combines them into a single register word. Without these operators, you would need to manually compute the final hex value — error-prone, unreadable, and impossible to maintain when clock speeds change.
+
 ---
 
 ## 2. Setting a Bit — `|=`
@@ -186,6 +241,116 @@ NVIC.iser[0].write(1 << 28);
 | Start a timer | Set CEN (counter enable) bit |
 | Lock a resource | Set mutex bit in mailbox register |
 | Enable pull-up resistor | Set PU bit in GPIO mode register |
+
+### ⚡ Story: The Peripheral That Wouldn't Wake Up
+
+**The Scene:** A developer is adding SPI flash support to a firmware image. The SPI controller is on an STM32, connected to a Macronix flash chip. They've carefully configured the SPI baud rate, polarity, phase, and data size. But every transaction returns 0xFF — the SPI "bus idle" value.
+
+**The Code That Failed:**
+```rust
+fn setup_spi() {
+    // Configure SPI1
+    SPI1.cr1.modify(|_, w| unsafe {
+        w.baud().div16()        // Baud rate = PCLK / 16
+         .cpol().idle_low()     // Clock polarity: idle low
+         .cpha().first_edge()   // Clock phase: capture on first edge
+         .mstr().master()       // Master mode
+         .spe().enabled()       // SPI enabled
+    });
+    
+    // Send read-ID command
+    unsafe {
+        core::ptr::write_volatile(SPI1_DR as *mut u8, 0x9F);  // JEDEC ID command
+    }
+    
+    // Wait for RXNE (Receive Not Empty)
+    while SPI1.sr.read().rxne().bit_is_clear() {}
+    
+    let id = unsafe { core::ptr::read_volatile(SPI1_DR as *const u8) };
+    // id = 0xFF -- expected 0xEF (Macronix manufacturer ID)
+}
+```
+
+**The Investigation:** The developer spent hours checking:
+- SPI pin connections (correct on scope)
+- SPI clock frequency (within flash chip spec)
+- SPI mode (Mode 0, correct)
+- Flash chip power (3.3V stable)
+
+**The Real Problem:**
+```rust
+fn setup_spi() {
+    // ── MISSING! ──
+    // RCC_AHB1ENR bit 12 = SPI1 clock enable
+    // RCC.apb2enr.modify(|_, w| w.spi1en().set_bit());
+    //      ^^ Without this, the write to SPI1_CR1 is silently ignored!
+    
+    SPI1.cr1.modify(|_, w| unsafe {
+        w.baud().div16()
+         .cpol().idle_low()
+         .cpha().first_edge()
+         .mstr().master()
+         .spe().enabled()    // ← This write goes NOWHERE
+    });
+}
+```
+
+**How `|=` relates:** The `RCC.apb2enr.modify(|_, w| w.spi1en().set_bit())` generates:
+```rust
+// Equivalent: RCC_APB2ENR |= 1 << 12;
+```
+
+This **set-bit operation** enables the clock gate to the SPI1 peripheral. Without the clock, the SPI1 registers are in a clock-gated domain — writes are ignored, reads return 0x0000_0000 or whatever the bus returns for unmapped addresses (typically 0xFFFF_FFFF for ARM Cortex-M).
+
+**The SPI1 clock enable bit 12 in RCC_APB2ENR** is the master switch for the entire SPI1 peripheral:
+
+```text
+RCC_APB2ENR register:
+Bit 12 = SPI1EN (SPI1 clock enable)
+  ┌─ 0: SPI1 clock disabled (all SPI1 register writes silently ignored)
+  └─ 1: SPI1 clock enabled (SPI1 registers are accessible)
+```
+
+This single bit controls whether 100+ other bits in SPI1's registers (CR1, CR2, SR, DR, CRCPR, etc.) have any effect. Setting it with `|= (1 << 12)` is the first thing you must do before any other SPI configuration.
+
+**The Fix:**
+```rust
+fn setup_spi() {
+    // Step 1: Enable SPI1 clock (MANDATORY - first `|=`)
+    RCC.apb2enr.modify(|_, w| w.spi1en().set_bit());
+    // Equivalent: RCC_APB2ENR |= 1 << 12;
+    
+    // Step 2: Now configure SPI — these writes work because clock is on
+    SPI1.cr1.modify(|_, w| unsafe {
+        w.baud().div16()
+         .cpol().idle_low()
+         .cpha().first_edge()
+         .mstr().master()
+         .spe().enabled()
+    });
+    
+    // Step 3: Send read-ID — now it works
+    while SPI1.sr.read().txe().bit_is_clear() {}  // Wait TXE (bit 1)
+    unsafe {
+        core::ptr::write_volatile(SPI1_DR as *mut u8, 0x9F);
+    }
+    
+    while SPI1.sr.read().rxne().bit_is_clear() {}  // Wait RXNE (bit 0)
+    // Now returns 0xEF (Macronix) instead of 0xFF
+}
+```
+
+**The Deeper Lesson:** The `|= (1 << N)` pattern isn't just about setting a bit — it's about **enabling hardware**. Each peripheral clock enable bit is the gateway between software and a physical hardware block. Without it, the peripheral is electrically isolated from the CPU bus. No amount of correct register configuration matters if the clock gate is closed.
+
+The pattern is universal across microcontrollers:
+| MCU Family | Clock Enable Register | SPI1 Enable Bit |
+|------------|---------------------|-----------------|
+| STM32F4 | RCC_APB2ENR | Bit 12 |
+| RP2040 | RESETS_CLR | Bit 3 (spi1) |
+| ESP32-C3 | SYSTEM_PERIPH_CLK_EN0 | Bit 14 |
+| nRF52840 | CLOCK_PERIPHERAL — no explicit gate | Works by default |
+
+**Real GitHub reference:** Every HAL crate starts peripheral configuration with a clock-enable `|=` operation. In `stm32f4xx-hal` (stm32-rs/stm32f4xx-hal on GitHub), the `Spi::new()` function calls `rcc.apb2enr.modify(|_, w| w.spi1en().set_bit())` as its first register operation.
 
 ---
 
@@ -270,6 +435,71 @@ unsafe {
 | Clear interrupt flag | Acknowledge interrupt (required by hardware) |
 | Release a lock | Allow other agents to access shared resource |
 | Disable pull resistor | Set GPIO to Hi-Z or floating |
+
+### ⚡ Story: The Interrupt Storm That Locked the System
+
+**The Scene:** A timer interrupt fires every 1ms to handle a real-time control loop. The interrupt handler reads the timer's status register, processes data, and returns.
+
+**The Bug:**
+```rust
+#[interrupt]
+fn TIM2() {
+    // Read the status register to check if this is an update interrupt
+    let sr = TIM2.sr.read();
+    if sr.uif().bit_is_set() {          // Check Update Interrupt Flag (bit 0)
+        // Handle the timer update
+        control_loop_tick();
+        // ── Return from interrupt ──
+    }
+}
+// ── System immediately re-enters TIM2 interrupt! ──
+// The control loop runs once, then the interrupt fires again immediately
+// Eventually: "stack overflow" or "watchdog reset"
+```
+
+**What happened?** The STM32 timer's Update Interrupt Flag (UIF, bit 0 of SR) is **only cleared by software**. The hardware sets UIF = 1 when the timer overflows, but it never clears it. If the handler doesn't clear UIF, the NVIC sees the interrupt pending bit still set, and re-enters the handler the instant it returns.
+
+**The Fix — Clear the Flag:**
+```rust
+#[interrupt]
+fn TIM2() {
+    let sr = TIM2.sr.read();
+    if sr.uif().bit_is_set() {
+        // ── CRITICAL: Clear the interrupt flag ──
+        TIM2.sr.modify(|_, w| w.uif().clear_bit());
+        // Equivalent raw: TIM2_SR &= !(1 << 0);
+        // The &= !(1 << 0) forces bit 0 to 0 while preserving bits 1-31
+        
+        control_loop_tick();
+    }
+}
+```
+
+**Why did the bit NOT clear automatically?** There are three types of register bits in hardware:
+
+| Bit type | Behavior | Example |
+|----------|----------|---------|
+| **RW** (Read-Write) | Stays until software changes it | MODER, ODR |
+| **RC_W0** (Read-Clear by Write 0) | Cleared when you write 0 | Timer SR flags |
+| **RC_W1** (Read-Clear by Write 1) | Cleared when you write 1 | Exti PR |
+
+**The Timer SR UIF bit is RC_W0** — you must write 0 to clear it. But many engineers (especially coming from C) write:
+```c
+// C code — WORKS because of how the hardware interprets the write
+TIM2->SR = ~TIM_SR_UIF;  // Write 0 to bit 0, 1 to everything else
+```
+
+In Rust with a PAC:
+```rust
+// Rust PAC equivalent — generates the correct `&=` operation
+TIM2.sr.modify(|_, w| w.uif().clear_bit());
+```
+
+**The result after fix:** The timer interrupt fires exactly once per millisecond, the flag is cleared in the handler, and the control loop runs at the correct frequency. No more stack overflow.
+
+**The Deeper Lesson:** Every bit that hardware sets must be explicitly cleared by software — unless the datasheet says otherwise. The `&= !(1 << N)` pattern is not optional; it's part of the interrupt contract. Forgetting it is the firmware equivalent of forgetting to take out the trash — the problem keeps coming back.
+
+**Real GitHub reference:** Every STM32 HAL timer example (stm32-rs/stm32f4xx-hal on GitHub) shows the `clear_bit()` call in the interrupt handler. The `embedded-hal` `CountDown` trait implementations include this as a required step in their `wait()` methods.
 
 ---
 
@@ -374,6 +604,77 @@ fn simple_hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
 | Cryptographic mixing | XOR is reversible and balanced |
 | Parity bit generation | XOR all bits = parity |
 
+### ⚡ Story: The XOR That Caught a Glitching Power Supply
+
+**The Scene:** A server management controller monitors 16 voltage rails through an ADC. Each rail must stay within ±5% of its nominal voltage. The monitoring firmware runs on a tight 1ms loop.
+
+**The Problem:** Once every few hours, a random voltage reading would be wildly out of range — 12V rail showing 0.3V, 3.3V rail showing 8.1V. These "phantom spikes" triggered false alerts that caused unnecessary server throttling.
+
+**The investigation revealed:** The ADC was connected via SPI to the main controller. On some clock cycles, noise from a nearby switching regulator would corrupt a single bit in the SPI transaction:
+
+```text
+Expected reading:  12.0V = 0b_0010_1100_0110_0000  (0x2C60)
+Received reading:  0.3V  = 0b_0000_0000_0110_0000  (0x0060)
+                                              ^
+                                  Bit 13 flipped from 1 to 0
+```
+
+**Why XOR was the solution (not a CRC):** The team couldn't add a CRC byte to the ADC's output (it was a fixed-protocol chip). But they realized they could XOR consecutive readings. Because the voltage changes slowly (~10mV per reading at most), two consecutive readings should differ by very few bits:
+
+```rust
+fn is_spike(prev: u16, current: u16, threshold: u16) -> bool {
+    // XOR finds every bit that changed between readings
+    let diff = prev ^ current;
+    // ── XOR result: bit N = 1 means that bit CHANGED ──
+    // If prev = 0x2C60 and current = 0x0060:
+    //   0x2C60 = 0010_1100_0110_0000
+    // ^ 0x0060 = 0000_0000_0110_0000
+    // ───────────────────────────────
+    //   0x2C00 = 0010_1100_0000_0000
+    //                       ↑↑  Bit 13 and 12 changed
+    //   diff = 0x2C00, which is WAY above threshold
+    
+    diff > threshold
+}
+```
+
+**How the filtering works:**
+
+```rust
+const VOLTAGE_THRESHOLD: u16 = 100;  // Max expected change between reads
+
+fn process_voltage_samples(samples: &[u16]) -> f32 {
+    let mut valid_count = 0;
+    let mut sum: u32 = 0;
+    let mut prev = samples[0];
+    
+    for &sample in &samples[1..] {
+        if !is_spike(prev, sample, VOLTAGE_THRESHOLD) {
+            // XOR says: few bits changed → valid reading
+            sum += sample as u32;
+            valid_count += 1;
+            prev = sample;
+        }
+        // else: XOR says: many bits changed → probable glitch, discard
+    }
+    
+    if valid_count == 0 { 0.0 } else { sum as f32 / valid_count as f32 }
+}
+```
+
+**The result:** False alerts dropped from ~50 per hour to 0. The XOR-based spike filter was so effective because:
+- A single-bit SPI glitch produces a highly uncorrelated value (XOR reveals many bits different)
+- A legitimate voltage change flips only the lowest 1-2 bits (XOR shows few bits different)
+- The threshold is calculated from the known maximum slew rate of the power supply
+
+**The Deeper Lesson:** XOR's "different bits detector" property (`a ^ b` has 1s where a and b differ) is useful far beyond register manipulation. In this case, it detected hardware faults that would have been invisible at the register level. The `^` operator is simultaneously:
+- A toggle (`reg ^= mask`)
+- A differentiator (`prev ^ current`)
+- A parity checker (XOR all bits tells you even/odd)
+- A CRC building block (polynomial division with XOR)
+
+All from the same truth table: `0^0=0, 0^1=1, 1^0=1, 1^1=0`.
+
 ---
 
 ## 5. Checking a Bit — `&`
@@ -455,6 +756,85 @@ if status & READY_MASK == READY_MASK {
 | Read switch/button state | Input pin high or low? |
 | Validate configuration | Was register written correctly? |
 | Check interrupt source | Which peripheral triggered this IRQ? |
+
+### ⚡ Story: The Uninitialized Peripheral That Looked Ready
+
+**The Scene:** A sensor driver polls a "data ready" bit before reading. The status register bit 3 (DATA_RDY) should be 1 when new data is available. The code works on the eval board but fails on the production board — it always sees DATA_RDY = 1, even when no data was requested.
+
+**The Code That Failed:**
+```rust
+fn read_sensor() -> Result<u16, Error> {
+    loop {
+        let status = unsafe {
+            core::ptr::read_volatile(SENSOR_STATUS as *const u32)
+        };
+        if status & (1 << 3) != 0 {  // Check DATA_RDY bit
+            let data = unsafe {
+                core::ptr::read_volatile(SENSOR_DATA as *const u32)
+            } as u16;
+            return Ok(data);
+        }
+        if status & (1 << 4) != 0 {  // Check ERROR bit
+            return Err(Error::SensorFault);
+        }
+        cortex_m::asm::wfe();  // Wait for event (low-power)
+    }
+}
+// ── Returns Ok(0) immediately, every time ──
+// Data is always 0x0000, but DATA_RDY is always 1
+```
+
+**The Investigation:** The developer used an oscilloscope to check the sensor's INT pin (which asserts when DATA_RDY is set). The INT pin was floating at 1.8V — neither high nor low. The sensor was never actually started.
+
+**What really happened:** On the production board, the sensor's power supply was connected to a GPIO-controlled enable pin (to save power). The firmware never set that GPIO high, so the sensor was unpowered. But:
+- The unpowered sensor's INT pin was pulled to an indeterminate voltage by an external pull-up resistor
+- The status register address (SENSOR_STATUS) was actually mapped to a different, powered device that always returned 0xFF (all bits set)
+- `0xFF & (1 << 3) = 0x08 ≠ 0`, so DATA_RDY appeared to be set
+- The data register returned 0x0000 because it was reading from a different register
+
+**The fix required TWO bit checks:**
+```rust
+fn read_sensor() -> Result<u16, Error> {
+    // Step 1: Check power-good bit (separate power management register)
+    let pwr_status = unsafe {
+        core::ptr::read_volatile(POWER_MGMT as *const u32)
+    };
+    if pwr_status & (1 << SENSOR_PWR_BIT) == 0 {
+        return Err(Error::SensorOff);
+    }
+    
+    // Step 2: Enable the sensor (set START_CONVERSION bit)
+    unsafe {
+        core::ptr::write_volatile(SENSOR_CTRL as *mut u32, 
+            core::ptr::read_volatile(SENSOR_CTRL as *const u32) | (1 << 0));
+    }
+    
+    // Step 3: Wait for DATA_RDY — now it won't be set immediately
+    loop {
+        let status = unsafe {
+            core::ptr::read_volatile(SENSOR_STATUS as *const u32)
+        };
+        if status & (1 << 3) != 0 {   // DATA_RDY — actually waiting now
+            let data = unsafe {
+                core::ptr::read_volatile(SENSOR_DATA as *const u32)
+            } as u16;
+            return Ok(data);
+        }
+        if status & (1 << 4) != 0 {   // ERROR
+            return Err(Error::SensorFault);
+        }
+    }
+}
+```
+
+**The Deeper Lesson:** Checking a bit tells you the state of a wire. But if the device at the other end of the wire is unpowered, the wire can read as 1 due to pull-up resistors, crosstalk, or register aliasing. A bit check is only meaningful when:
+1. The peripheral's clock is enabled (`&` against RCC enable register)
+2. The peripheral is powered (check PMIC status bits)
+3. The peripheral has been started (check that the START bit was set)
+
+The `&` operator is correct — but the question you're asking with it must be grounded in hardware reality: "is this bit set?" is only useful if the hardware is actually running.
+
+**Real GitHub reference:** In the Linux kernel's I2C subsystem (a useful analog, as similar patterns apply), every device access starts with `pm_runtime_get_sync()` before checking any status bits — ensuring the device is powered and clocked before the first register read.
 
 ---
 
@@ -554,6 +934,85 @@ impl ControlRegWriteVal {
 ```
 
 Every method body is the exact clear-then-set pattern, but hidden behind a type-safe API. The bit positions and widths are compile-time constants derived from the hardware specification.
+
+### ⚡ Story: The GPIO That Was an Analog Input
+
+**The Scene:** A developer is bringing up UART on an STM32 board. They've configured the baud rate, stop bits, and parity correctly. They've enabled the USART clock. But no data comes out of the TX pin.
+
+**The Bug:**
+```rust
+fn setup_uart() {
+    // Enable USART1 clock
+    RCC.apb2enr.modify(|_, w| w.usart1en().set_bit());
+    
+    // Configure PA9 (TX) and PA10 (RX)
+    // Set baud rate, enable transmitter/receiver
+    USART1.cr1.modify(|_, w| {
+        w.te().set_bit()     // Transmitter Enable
+         .re().set_bit()     // Receiver Enable
+         .ue().set_bit()     // USART Enable
+    });
+    
+    // Send a test byte
+    USART1.tdr.write(|w| unsafe { w.bits(0x41) });  // 'A'
+    // ── Nothing appears on the oscilloscope ──
+}
+```
+
+**What happened?** The GPIO port A was in its default reset state: all pins configured as **analog mode** (MODER bits = 0b11, value 3). In analog mode, the pin's digital output buffer is disconnected from the pad. The USART peripheral can write to the ODR register all it wants — the signal never reaches the physical pin.
+
+The MODER register uses **2-bit fields per pin**:
+
+```text
+MODER bits for PA9 (pin 9): bits [19:18]  (because 9 × 2 = 18)
+MODER bits for PA10 (pin 10): bits [21:20] (because 10 × 2 = 20)
+
+Value encoding:
+  00 = Input (reset, but PA9 and PA10 default to analog on some STM32 families!)
+  01 = Output
+  10 = Alternate function (required for USART!)
+  11 = Analog (default)
+```
+
+**The Fix — Bitfield Write:**
+```rust
+fn setup_uart() {
+    RCC.apb2enr.modify(|_, w| w.usart1en().set_bit());
+    
+    // ── CRITICAL: Configure PA9 and PA10 for alternate function ──
+    // MODER field for PA9: bits [19:18], value = 0b10 (alternate)
+    // MODER field for PA10: bits [21:20], value = 0b10 (alternate)
+    GPIOA.moder.modify(|_, w| unsafe {
+        w.moder9().alt().moder10().alt()
+    });
+    // Equivalent raw bitfield operations:
+    // 1. Clear PA9 field:  gpioa_moder &= !(0b11 << 18);
+    // 2. Set PA9 field:    gpioa_moder |= (0b10 << 18);   // alt function
+    // 3. Clear PA10 field: gpioa_moder &= !(0b11 << 20);
+    // 4. Set PA10 field:   gpioa_moder |= (0b10 << 20);   // alt function
+    
+    // Also need to set the alternate function number (AF7 for USART1)
+    // AFRH register: PA9 bits [7:4], PA10 bits [11:8]
+    GPIOA.afrh.modify(|_, w| unsafe {
+        w.afrh9().af7().afrh10().af7()
+    });
+    
+    // Now USART will actually transmit on the physical pins
+    USART1.cr1.modify(|_, w| {
+        w.te().set_bit()
+         .re().set_bit()
+         .ue().set_bit()
+    });
+    USART1.tdr.write(|w| unsafe { w.bits(0x41) });
+    // ── "A" appears on the oscilloscope! ──
+}
+```
+
+**The Deeper Lesson:** A register bit is not just a software concept — it's a **physical control wire** inside the chip. When the MODER field is set to `0b11` (analog), the wire that connects the USART's TX output to the pin pad is physically disconnected. No amount of correct USART configuration can overcome a wrong bitfield value in an unrelated register.
+
+This is why bitfields are so fundamental to firmware: one 2-bit field in MODER controls whether a completely different peripheral (USART) can function at all. The `(reg & !MASK) | (VALUE << SHIFT)` pattern is how you surgically modify these fields without touching the 15 other pins configured in the same register.
+
+**Real GitHub reference:** The STM32 HAL (stm32-rs/stm32f4xx-hal on GitHub) handles this in every GPIO configuration function. The `gpio::Pin::into_alternate()` method generates the exact `modify(|_, w| unsafe { w.moder().alt() })` code — wrapping the bitfield write in a safe, named API.
 
 ---
 
@@ -677,6 +1136,52 @@ impl Mmio for RealMmio<'_> {
 ```
 
 By making `Mmio` a trait, the crate allows **testing register access without real hardware** — a mock `Mmio` implementation returns predictable values, while the real implementation delegates to `read_volatile`. The unsafety is concentrated in one `impl` block.
+
+### ⚡ Story: The Wrong Register Offset That Corrupted Production Data
+
+**The Scene:** A security coprocessor's firmware needs to read a fuse register to retrieve a device-unique key. The register is at offset `0x1C` from the fuse controller base address `0xF000_0000`. The firmware uses a PAC generated from the company's SVD file.
+
+**The Bug:**
+```rust
+// Auto-generated PAC code (simplified):
+fn read_fuse_value(fuse_num: u32) -> u32 {
+    // FUSE_DATA register = FUSE_BASE + 0x1C
+    unsafe {
+        core::ptr::read_volatile((0xF000_0000 + 0x1C) as *const u32)
+    }
+}
+// Returns 0xDEADBEEF instead of the actual fuse value
+```
+
+**What happened?** The SVD file had a typo: the FUSE_DATA register was listed at offset `0x1C`, but the hardware engineer's register map said offset `0x20`. The PAC was regenerated with the wrong offset. Every key read returned data from the wrong register — the one at `0x1C` was a scratch register used by the boot ROM, not the fuse value.
+
+**The Consequences:**
+- The device-unique key used for attestation was actually a scratch value written by the boot ROM
+- All devices generated the same "unique" key (SCRATCH register was initialized to 0 by reset)
+- The attestation protocol was completely broken — every device appeared identical
+- The bug was discovered during production validation when two devices returned identical certificates
+
+**How `unsafe` is relevant:** The `unsafe` block around `read_volatile` tells the compiler "trust me, this address is valid MMIO." But the compiler has no way to verify that `0xF000_001C` actually maps to the FUSE_DATA register. The programmer's guarantee was wrong because the SVD file was wrong. The `unsafe` keyword correctly shifted the responsibility to the programmer — but the team didn't have a process to validate generated PAC offsets against the hardware register map.
+
+**The Fix:**
+```rust
+// After hardware team confirmed: FUSE_DATA is at offset 0x20, not 0x1C
+fn read_fuse_value(fuse_num: u32) -> u32 {
+    unsafe {
+        // Corrected offset: 0x20, verified against hardware specification v2.3
+        core::ptr::read_volatile((0xF000_0000 + 0x20) as *const u32)
+    }
+}
+```
+
+**The Deeper Lesson:** `unsafe` doesn't mean "this code might crash" — it means "the compiler cannot prove this is correct, so the programmer must." In firmware, the most common unsafe contract violation is not buffer overflow or dangling pointers (as in general-purpose Rust), but **register addresses and bit positions that disagree with the hardware**. A PAC crate is only as trustworthy as the SVD file it was generated from, and the SVD file is only as trustworthy as the engineer who wrote it.
+
+**How to prevent this:** Use the `ureg` crate's `Mmio` trait to make the MMIO implementation mockable, then write integration tests that:
+1. Run the register access code against a mock MMIO
+2. Verify the expected addresses and values are read/written
+3. Compare the mock trace against the hardware register map
+
+The `unsafe` boundary is concentrated in a single `impl RealMmio` block, and all register access logic is testable without hardware.
 
 ---
 
@@ -1095,6 +1600,83 @@ impl<TReg: ResettableReg + WritableReg, TMmio: MmioMut> RegRef<TReg, TMmio> {
 
 This is the end-state of the abstraction: **the bit positions and widths are compile-time knowledge**, and the `|=`, `&=`, `<<` patterns are generated code, invisible to the application developer.
 
+### ⚡ Story: The UART Driver That Just Worked on Three Platforms
+
+**The Scene:** A team is building a firmware feature that must run on three different microcontrollers: STM32F4 (Cortex-M4), RP2040 (Cortex-M0+), and ESP32-C3 (RISC-V). The feature needs to send debug output over UART.
+
+**The Old Way (platform-specific):**
+```rust
+// STM32 version:
+pub fn stm32_send_byte(byte: u8) {
+    // Wait until TXE (Transmit Empty) bit is set
+    while USART1.sr.read().txe().bit_is_clear() {}  // reg & (1 << 7) == 0
+    // Write data
+    USART1.dr.write(|w| w.dr().bits(byte as u16));   // reg = byte
+}
+
+// RP2040 version:
+pub fn rp2040_send_byte(byte: u8) {
+    // Wait until UARTDR bit 31 (TXFE) is clear
+    while UART.fr.read().txfe().bit_is_set() {}       // reg & (1 << 4) != 0
+    // Write data
+    UART.dr.write(|w| w.dr().bits(byte));              // reg = byte
+}
+
+// ESP32-C3 version:
+pub fn esp32_send_byte(byte: u8) {
+    // Wait until TX_DONE bit is set
+    while UART.status.read().tx_done().bit_is_clear() {}  // reg & (1 << 10) == 0
+    // Write data
+    UART.tx_fifo.write(|w| w.tx_data().bits(byte));       // different register!
+}
+```
+
+**The Problem:** Three different implementations, three different register layouts, three different bit positions for the "ready to transmit" signal. If a bug is fixed in one, it must be manually ported to the other two. New engineers must learn all three register maps. Testing requires three different boards.
+
+**The Trait-Based Solution:**
+```rust
+// ── One trait, one abstraction ──
+trait UartSend {
+    fn send_byte(&mut self, byte: u8);
+}
+
+// ── STM32 implementation ──
+impl UartSend for Stm32Uart {
+    fn send_byte(&mut self, byte: u8) {
+        // embedded-hal's blocking::serial::Write trait
+        nb::block!(self.uart.write(byte)).unwrap();
+        // Internally: polls USART_SR bit 7 (TXE), writes USART_DR
+    }
+}
+
+// ── RP2040 implementation ──
+impl UartSend for Rp2040Uart {
+    fn send_byte(&mut self, byte: u8) {
+        nb::block!(self.uart.write(byte)).unwrap();
+        // Internally: polls UART_FR bit 4 (TXFE), writes UART_DR
+    }
+}
+
+// ── ESP32-C3 implementation ──
+impl UartSend for Esp32Uart {
+    fn send_byte(&mut self, byte: u8) {
+        nb::block!(self.uart.write(byte)).unwrap();
+        // Internally: polls UART_STATUS bit 10 (TX_DONE), writes UART_TX_FIFO
+    }
+}
+
+// ── Application code — NO BIT MANIPULATION VISIBLE ──
+fn send_debug_log<U: UartSend>(uart: &mut U, msg: &str) {
+    for byte in msg.bytes() {
+        uart.send_byte(byte);  // ← Works on STM32, RP2040, and ESP32
+    }
+}
+```
+
+**The Deeper Lesson:** Traits don't eliminate bit manipulation — they **encapsulate** it. Each implementation still has the exact same `&` to check the ready bit, `|=` or the equivalent to write data, and platform-specific register addresses. But the application code never sees a single bit operation. This is the essence of `embedded-hal`: the `OutputPin`, `Read`, `Write`, `SpiDevice`, `I2cDevice` traits all wrap the same shift-and-mask patterns behind a generic interface.
+
+**Real GitHub reference:** The `embedded-hal` crate (rust-embedded/embedded-hal on GitHub) defines these traits and has been implemented by HAL crates for 50+ microcontroller families. Each implementation internally uses the exact bit operations from this reference.
+
 ---
 
 ## 11. Async Firmware — Bits Under the Hood
@@ -1223,6 +1805,70 @@ async fn request_attestation(mailbox: &CaliptraMailbox) -> Result<Vec<u8>, Error
 ```
 
 Every `.await` conceals a polling loop that checks bits (`status & VALID != 0`), but the executor handles the waiting so other tasks run. The bit operations are identical — only the scheduling changes.
+
+### ⚡ Story: The I2C Lockup That Async Prevented
+
+**The Scene:** A multi-sensor board has three I2C devices: a temperature sensor, a humidity sensor, and a pressure sensor. Each needs to be read at different intervals (100ms, 200ms, 50ms). The original synchronous driver reads them sequentially:
+
+```rust
+// Synchronous — total loop time = sum of all three reads
+loop {
+    let temp = read_sensor(ADDR_TEMP);     // blocks ~40ms
+    let humid = read_sensor(ADDR_HUMID);   // blocks ~40ms
+    let press = read_sensor(ADDR_PRESS);   // blocks ~40ms
+    // total: 120ms per cycle
+    // Problem: humidity sensor needs sample every 100ms or data decays
+}
+```
+
+**The Bug:** With synchronous code, the humidity sensor is only polled every 120ms, but its datasheet says data must be read within 100ms of the conversion completing. After the conversion completes, the DATA_READY bit (bit 1 of the status register) stays high for only ~80ms, then clears automatically. By the time the synchronous loop gets to the humidity read, the DATA_READY bit has already cleared, and the read returns stale data.
+
+```text
+Temperature read:     [──── 40ms ────] [ready bit set for 80ms]
+Humidity conversion:                    [──── 40ms ────]
+                     ↑ temp done        ↑ 80ms later — ready bit already cleared!
+                                        Humidity read returns stale data!
+```
+
+**The Async Fix:**
+```rust
+#[embassy_executor::task]
+async fn read_temp(sensor: &mut TemperatureI2c) {
+    loop {
+        // Initiate conversion (set START bit via I2C_CR1 bit 8)
+        sensor.start_conversion().await;
+        Timer::after_millis(40).await;  // wait for conversion
+        
+        // I2C_SR1 bit 1 (TXE): wait until data register empty
+        // I2C_SR1 bit 6 (RXNE): wait until data register not empty
+        let data = sensor.read().await;  // polls status bits underneath
+        // I2C_SR3 bit 0 (BUSY): checked before next transaction
+        process_temp(data);
+        
+        Timer::after_millis(100).await;  // async sleep — executor runs other tasks
+    }
+}
+
+#[embassy_executor::task]
+async fn read_humid(sensor: &mut HumidityI2c) {
+    loop {
+        sensor.start_conversion().await;
+        Timer::after_millis(80).await;
+        
+        // ── THIS READ HAPPENS WITHIN THE 80ms WINDOW ──
+        // Because the executor ran this task while read_temp was sleeping!
+        // DATA_READY bit (I2C_SR1 bit 4) is still set
+        let data = sensor.read().await;  // clean, fresh data
+        process_humidity(data);
+        
+        Timer::after_millis(200).await;
+    }
+}
+```
+
+**The Key Insight:** The async runtime doesn't change the bit manipulation — `read()` still polls `I2C_SR1 & (1 << 1) != 0` (TXE check) and `I2C_SR1 & (1 << 6) != 0` (RXNE check) internally. What changes is the **scheduling**: the executor interleaves the polling so no single sensor's ready window expires before its data is read.
+
+**Real GitHub reference:** The Embassy `i2c::I2c` trait's `read()` method (in `embassy-rs/embassy`) internally polls I2C status registers using the exact same `&` and `>>` bit operations shown in earlier sections. The async wrapper just makes the busy-wait yield to the executor.
 
 ---
 

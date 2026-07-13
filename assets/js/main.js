@@ -1,6 +1,7 @@
-// Rust Firmware Wiki - Interactive Features
+// Rust Firmware Wiki — Interactive Experience
+// Hypnotic AMOLED · Glass Core · Psychodelic Red/Black
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', () => {
   initCollapsibles();
   initTabs();
   initQuizzes();
@@ -8,39 +9,42 @@ document.addEventListener('DOMContentLoaded', function() {
   initHeaderScroll();
   initCopyButtons();
   initPlayground();
+  initMobileMenu();
+  initScrollProgress();
+  initReveal();
+  initCardTilt();
+  initCodeLineNumbers();
+  initRippleEffect();
 });
 
-// Collapsible sections
+// ─── Collapsible sections ───────────────────────────────
 function initCollapsibles() {
-  document.querySelectorAll('.collapsible-header').forEach(header => {
-    header.addEventListener('click', () => {
-      const section = header.parentElement;
-      section.classList.toggle('open');
-    });
+  document.querySelectorAll('.collapsible-header').forEach(h => {
+    h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
   });
 }
 
-// Tab navigation
+// ─── Tab navigation ─────────────────────────────────────
 function initTabs() {
   document.querySelectorAll('.tabs').forEach(tabContainer => {
     const tabs = tabContainer.querySelectorAll('.tab');
-    const contents = tabContainer.parentElement.querySelectorAll('.tab-content');
+    const container = tabContainer.closest('.tabs-container') || tabContainer.parentElement;
+    const contents = container.querySelectorAll('.tab-content');
 
     tabs.forEach(tab => {
       tab.addEventListener('click', () => {
         const target = tab.dataset.tab;
-
         tabs.forEach(t => t.classList.remove('active'));
         contents.forEach(c => c.classList.remove('active'));
-
         tab.classList.add('active');
-        document.getElementById(target).classList.add('active');
+        const el = document.getElementById(target);
+        if (el) el.classList.add('active');
       });
     });
   });
 }
 
-// Quiz functionality
+// ─── Quizzes ────────────────────────────────────────────
 function initQuizzes() {
   document.querySelectorAll('.quiz').forEach(quiz => {
     const options = quiz.querySelectorAll('.quiz-option');
@@ -50,32 +54,33 @@ function initQuizzes() {
     options.forEach(option => {
       option.addEventListener('click', () => {
         if (quiz.dataset.answered === 'true') return;
-
         const answer = option.dataset.answer;
         quiz.dataset.answered = 'true';
 
         options.forEach(o => {
           o.style.pointerEvents = 'none';
-          if (o.dataset.answer === correctAnswer) {
-            o.classList.add('correct');
-          }
+          if (o.dataset.answer === correctAnswer) o.classList.add('correct');
         });
 
         if (answer === correctAnswer) {
           option.classList.add('correct');
-          feedback.textContent = 'Correct! ' + (quiz.dataset.explanation || '');
-          feedback.className = 'quiz-feedback show correct';
+          if (feedback) {
+            feedback.textContent = '✓ Correct! ' + (quiz.dataset.explanation || '');
+            feedback.className = 'quiz-feedback show correct';
+          }
         } else {
           option.classList.add('incorrect');
-          feedback.textContent = 'Incorrect. ' + (quiz.dataset.explanation || '');
-          feedback.className = 'quiz-feedback show incorrect';
+          if (feedback) {
+            feedback.textContent = '✗ Incorrect. ' + (quiz.dataset.explanation || '');
+            feedback.className = 'quiz-feedback show incorrect';
+          }
         }
       });
     });
   });
 }
 
-// Back to top button
+// ─── Back to top ─────────────────────────────────────────
 function initBackToTop() {
   const btn = document.createElement('button');
   btn.className = 'back-to-top';
@@ -84,11 +89,7 @@ function initBackToTop() {
   document.body.appendChild(btn);
 
   window.addEventListener('scroll', () => {
-    if (window.scrollY > 500) {
-      btn.classList.add('visible');
-    } else {
-      btn.classList.remove('visible');
-    }
+    btn.classList.toggle('visible', window.scrollY > 500);
   });
 
   btn.addEventListener('click', () => {
@@ -96,130 +97,221 @@ function initBackToTop() {
   });
 }
 
-// Header scroll effect
+// ─── Header scroll effect ───────────────────────────────
 function initHeaderScroll() {
   const header = document.querySelector('.site-header');
   if (!header) return;
-
   window.addEventListener('scroll', () => {
-    if (window.scrollY > 50) {
-      header.classList.add('scrolled');
-    } else {
-      header.classList.remove('scrolled');
-    }
+    header.classList.toggle('scrolled', window.scrollY > 50);
   });
 }
 
-// Copy code buttons
+// ─── Copy code buttons ──────────────────────────────────
 function initCopyButtons() {
   document.querySelectorAll('pre').forEach(pre => {
+    if (pre.querySelector('.copy-btn')) return;
     const btn = document.createElement('button');
     btn.className = 'copy-btn';
     btn.textContent = 'Copy';
-    btn.style.cssText = `
-      position: absolute;
-      top: 0.5rem;
-      right: 4rem;
-      background: var(--bg-tertiary);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      padding: 0.3rem 0.75rem;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      cursor: pointer;
-      transition: all 0.2s;
-      z-index: 10;
-    `;
-
     pre.style.position = 'relative';
     pre.appendChild(btn);
 
     btn.addEventListener('click', async () => {
       const code = pre.querySelector('code');
       const text = code ? code.textContent : pre.textContent;
-
       try {
         await navigator.clipboard.writeText(text);
         btn.textContent = 'Copied!';
         btn.style.color = 'var(--success)';
-        setTimeout(() => {
-          btn.textContent = 'Copy';
-          btn.style.color = 'var(--text-muted)';
-        }, 2000);
-      } catch (err) {
+        setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = ''; }, 2000);
+      } catch {
         btn.textContent = 'Failed';
         btn.style.color = 'var(--error)';
-        setTimeout(() => {
-          btn.textContent = 'Copy';
-          btn.style.color = 'var(--text-muted)';
-        }, 2000);
+        setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = ''; }, 2000);
       }
     });
   });
 }
 
-// Interactive playground
+// ─── Interactive playground ─────────────────────────────
 function initPlayground() {
-  document.querySelectorAll('.playground').forEach(playground => {
-    const textarea = playground.querySelector('textarea');
-    const output = playground.querySelector('.playground-output');
-    const runBtn = playground.querySelector('.run-btn');
-
+  document.querySelectorAll('.playground').forEach(pg => {
+    const textarea = pg.querySelector('textarea');
+    const output = pg.querySelector('.playground-output');
+    const runBtn = pg.querySelector('.run-btn');
     if (!runBtn || !textarea || !output) return;
 
-    runBtn.addEventListener('click', () => {
-      const code = textarea.value;
-      simulateRun(code, output);
-    });
+    runBtn.addEventListener('click', () => simulateRun(textarea.value, output));
   });
 }
 
 function simulateRun(code, output) {
-  output.innerHTML = '<span class="info">Compiling...\n</span>';
-
+  output.innerHTML = '<span style="color:var(--text-muted)">▶ Compiling...</span>';
   setTimeout(() => {
     try {
-      // Simple Rust simulation
       const prints = [];
       const lines = code.split('\n');
-
       lines.forEach(line => {
-        // Match println! patterns
-        const printMatch = line.match(/println!\s*\(\s*"([^"]+)"/);
-        if (printMatch) {
-          let text = printMatch[1];
-          // Replace simple format patterns
-          text = text.replace(/\{\}/g, () => Math.floor(Math.random() * 100));
-          prints.push(text);
-        }
-
-        // Match println! with variables
-        const varMatch = line.match(/println!\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)/);
-        if (varMatch) {
-          prints.push(varMatch[1].replace(/\{\}/g, '42'));
-        }
+        const pm = line.match(/println!\s*\(\s*"([^"]+)"/);
+        if (pm) prints.push(pm[1].replace(/\{\}/g, () => String(Math.floor(Math.random() * 100))));
+        const fm = line.match(/format!\s*\(\s*"([^"]+)"/);
+        if (fm) prints.push(fm[1].replace(/\{\}/g, () => String(Math.floor(Math.random() * 100))));
       });
 
-      if (prints.length > 0) {
-        output.innerHTML = '<span class="success">Program output:</span>\n\n' +
-          prints.map(p => '> ' + p).join('\n') +
-          '\n\n<span class="success">Process finished with exit code 0</span>';
+      if (prints.length) {
+        output.innerHTML = '<span style="color:var(--success)">✓ Compiled successfully</span>\n\n' +
+          prints.map(p => '  ' + p).join('\n') +
+          '\n\n<span style="color:var(--text-dim)">Process finished with exit code 0</span>';
       } else {
-        output.innerHTML = '<span class="success">Process finished with exit code 0</span>\n\n(No output)';
+        output.innerHTML = '<span style="color:var(--success)">✓ Compiled successfully</span>\n\n' +
+          '<span style="color:var(--text-dim)">(no output)</span>\n\n' +
+          '<span style="color:var(--text-dim)">Process finished with exit code 0</span>';
       }
     } catch (e) {
-      output.innerHTML = '<span class="error">Error: ' + e.message + '</span>';
+      output.innerHTML = '<span style="color:var(--error)">✗ Compilation error:</span>\n  ' + e.message;
     }
-  }, 500);
+  }, 400);
 }
 
-// Smooth scroll for anchor links
+// ─── Mobile menu ────────────────────────────────────────
+function initMobileMenu() {
+  const toggle = document.getElementById('menuToggle');
+  const nav = document.getElementById('siteNav');
+  if (!toggle || !nav) return;
+
+  toggle.addEventListener('click', () => {
+    toggle.classList.toggle('active');
+    nav.classList.toggle('open');
+  });
+
+  nav.querySelectorAll('.nav-link').forEach(link => {
+    link.addEventListener('click', () => {
+      toggle.classList.remove('active');
+      nav.classList.remove('open');
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!toggle.contains(e.target) && !nav.contains(e.target) && nav.classList.contains('open')) {
+      toggle.classList.remove('active');
+      nav.classList.remove('open');
+    }
+  });
+}
+
+// ─── Scroll progress bar ────────────────────────────────
+function initScrollProgress() {
+  const bar = document.getElementById('scrollProgress');
+  if (!bar) return;
+
+  let ticking = false;
+  window.addEventListener('scroll', () => {
+    if (!ticking) {
+      requestAnimationFrame(() => {
+        const scrollTop = window.scrollY;
+        const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+        bar.style.width = (docHeight > 0 ? (scrollTop / docHeight) * 100 : 0) + '%';
+        ticking = false;
+      });
+      ticking = true;
+    }
+  });
+}
+
+// ─── Scroll-triggered reveal ────────────────────────────
+function initReveal() {
+  const revealEls = document.querySelectorAll('.chapter-card, .quiz, .playground, .comparison, table');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry, i) => {
+      if (entry.isIntersecting) {
+        entry.target.style.setProperty('--reveal-delay', `${i * 0.05}s`);
+        entry.target.classList.add('revealed');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.08, rootMargin: '30px' });
+
+  revealEls.forEach(el => observer.observe(el));
+}
+
+// ─── 3D magnetic card tilt ─────────────────────────────
+function initCardTilt() {
+  document.querySelectorAll('.chapter-card').forEach(card => {
+    let rafId = null;
+
+    card.addEventListener('mousemove', (e) => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const rect = card.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const cx = rect.width / 2;
+        const cy = rect.height / 2;
+        const rx = (y - cy) / 15;
+        const ry = (cx - x) / 15;
+        card.style.transform =
+          `translateY(-8px) scale(1.02) perspective(1200px) rotateX(${rx}deg) rotateY(${ry}deg)`;
+        rafId = null;
+      });
+    });
+
+    card.addEventListener('mouseleave', () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      card.style.transform = '';
+    });
+  });
+}
+
+// ─── Code line numbers ──────────────────────────────────
+function initCodeLineNumbers() {
+  document.querySelectorAll('pre code').forEach(codeBlock => {
+    const html = codeBlock.innerHTML;
+    const lines = html.split('\n');
+    if (lines.length <= 1) return;
+
+    const wrapped = lines.map(line => {
+      const trimmed = line.trim();
+      if (trimmed === '') return '<span class="line"><br></span>';
+      return `<span class="line">${line}</span>`;
+    }).join('\n');
+
+    codeBlock.innerHTML = wrapped;
+  });
+}
+
+// ─── Ripple click effect ────────────────────────────────
+function initRippleEffect() {
+  document.querySelectorAll('.btn, .quiz-option, .nav-btn, .chapter-card').forEach(el => {
+    el.addEventListener('click', function(e) {
+      const ripple = document.createElement('span');
+      const rect = this.getBoundingClientRect();
+      const size = Math.max(rect.width, rect.height);
+      const x = e.clientX - rect.left - size / 2;
+      const y = e.clientY - rect.top - size / 2;
+
+      ripple.style.cssText = `
+        position: absolute; top: ${y}px; left: ${x}px;
+        width: ${size}px; height: ${size}px;
+        border-radius: 50%; background: rgba(255, 26, 26, 0.15);
+        pointer-events: none; transform: scale(0);
+        animation: rippleAnim 0.6s ease-out forwards;
+      `;
+
+      // Ensure position:relative for ripple to anchor
+      if (getComputedStyle(this).position === 'static') this.style.position = 'relative';
+      this.appendChild(ripple);
+      setTimeout(() => ripple.remove(), 700);
+    });
+  });
+}
+
+// ─── Smooth scroll for anchor links ─────────────────────
 document.querySelectorAll('a[href^="#"]').forEach(anchor => {
   anchor.addEventListener('click', function(e) {
     e.preventDefault();
     const target = document.querySelector(this.getAttribute('href'));
-    if (target) {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 });
+
+
